@@ -1,87 +1,75 @@
-@startuml ekyc_finish_verification
-title eKYC 完了処理フロー (setFinishVerification)\nPOST /ekyc/AB1202 (JPKI) / POST /ekyc/AB1203 (He) ※両者は同一フロー
+@startuml ekyc_finish_verification_swimlane
+title eKYC 完了処理 (AB1202 JPKI / AB1203 He 共通)\n左=異常処理 / 右=正常処理フロー
 
+|#ffe8e0|異常|
+|#e8f5ff|正常|
+
+|正常|
 start
+:申請情報を作成;
 
-:createRequestInformationDto\n申請情報DTO作成;
+:申請情報登録API 呼出;
+if (例外発生?) then (yes)
+  |異常|
+  #ffd8b0:throw 例外;
+  stop
+else (no)
+endif
 
-:requestInformation\n申請情報登録API\n(LIQUID Connector へ REST 呼出);
-note right
-  EkycRemoteApiException / Exception
-  発生時は throw して異常終了
-end note
-
-if (requestResult == FAIL?) then (yes)
+|正常|
+if (登録 FAIL?) then (yes)
+  |異常|
   #ffdddd:return null;
   stop
+else (no)
 endif
 
-:requestAllData\n情報取得 (CompletableFuture.allOf で 3本を並列取得)\n- getPhotos : 画像データ取得\n- getVerificationResult : 自動判定結果\n- getIdDocumentInformation : ICカード読取情報;
-note right
-  getVerificationResult は
-  facePhoto=null なら 9秒 sleep→1回リトライ,
-  なお null なら RuntimeException
-  いずれか失敗 → throw EkycRemoteApiException
-  (リクエスト読取失敗)
-end note
+|正常|
+:情報取得 (allOf で並列);
+fork
+  :画像取得 (getPhotos);
+fork again
+  :自動判定結果 (getVerificationResult)\n※null時 9秒sleep→1回リトライ;
+fork again
+  :ICカード読取 (getIdDocumentInformation);
+end fork
+if (いずれか例外 / 取得失敗) then (yes)
+  |異常|
+  #ffd8b0:throw 例外 (リクエスト読取失敗);
+  stop
+else (no)
+endif
 
-if (verificationResult == null?) then (yes)
+|正常|
+:自動判定結果チェック;
+if (判定結果なし / NG?) then (yes)
+  |異常|
   #ffdddd:return null;
   stop
+else (no)
 endif
 
-:checkTheVerificationResults\n自動判定結果チェック;
+|正常|
+:本人画像・判定結果画像を iCOS 保存;
+if (保存失敗?) then (yes)
+  |異常|
+  #ffd8b0:throw 例外 (iCOS 保存失敗);
+  stop
+else (no)
+endif
 
-if (checkResult == FAIL?) then (yes)
+|正常|
+if (書類情報 / 画像なし) then (yes)
+  |異常|
   #ffdddd:return null;
   stop
+else (no)
 endif
 
-if (verificationJoinedData / photos が null?) then (yes)
-  #ffdddd:return null;
-  stop
-endif
-
-:storePhotosToICOS\n本人容貌画像を iCOS に保存;
-note right
-  Exception 発生時は
-  throw EkycRemoteApiException
-  (Failed to store iCOS)
-end note
-
-:storeVerificationResultImageToICOS\n判定結果画像を iCOS に保存 → list 追加;
-note right
-  Exception 発生時:
-  - JPKI(AB1202): InternalServerErrorException
-  - He (AB1203): EkycRemoteApiException
-end note
-
-if (idDocumentInformation == null?) then (yes)
-  #ffdddd:return null;
-  stop
-endif
-
-if (list が null / 空?) then (yes)
-  #ffdddd:return null;
-  stop
-endif
-
-:storeRequestInformationToABA\n申請情報を ABA に登録;
-
-if (personType?) then (個人 INDIVIDUAL)
-  :accountOpenAppliIndividualContentRegistration\n口座開設申込内容登録 (個人);
-else (法人 CORPORATE)
-  :accountOpenAppliContentUpdate\n口座開設申込内容更新 (法人);
-endif
-
-:receptionNumber 受付番号 取得;
-note right
-  ※ 末尾の getKycResult
-  (KYC結果登記API) は
-  現状 //TODO でコメントアウト
-end note
-
-#ddffdd:return receptionNumber\nJsonResult.success;
+|正常|
+:申請情報を ABA に登録\n(個人:登録 / 法人:更新);
+:受付番号を取得;
+#ddffdd:return 受付番号;
 stop
 
 @enduml
