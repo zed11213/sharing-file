@@ -16,25 +16,14 @@ if (requestResult == FAIL?) then (yes)
   stop
 endif
 
-:requestAllData\n情報取得 (CompletableFuture.allOf 並列);
+:requestAllData\n情報取得 (CompletableFuture.allOf で 3本を並列取得)\n- getPhotos : 画像データ取得\n- getVerificationResult : 自動判定結果\n- getIdDocumentInformation : ICカード読取情報;
 note right
-  並列取得 3本:
-  - getPhotos ... 画像データ取得
-  - getVerificationResult ... 自動判定結果
-    (facePhoto=null なら 9秒 sleep→1回リトライ,
-     なお null なら RuntimeException)
-  - getIdDocumentInformation ... ICカード読取情報
+  getVerificationResult は
+  facePhoto=null なら 9秒 sleep→1回リトライ,
+  なお null なら RuntimeException
   いずれか失敗 → throw EkycRemoteApiException
   (リクエスト読取失敗)
 end note
-
-fork
-  :getPhotos\n画像データ取得;
-fork again
-  :getVerificationResult\n自動判定結果;
-fork again
-  :getIdDocumentInformation\nICカード読取情報;
-end fork
 
 if (verificationResult == null?) then (yes)
   #ffdddd:return null;
