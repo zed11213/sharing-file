@@ -14,19 +14,18 @@ end note
 if (requestResult == FAIL?) then (yes)
   #ffdddd:return null;
   stop
-else (no / OK)
 endif
 
 :requestAllData\n情報取得 (CompletableFuture.allOf 並列);
 note right
   並列取得 3本:
-  * getPhotos                … 画像データ取得
-  * getVerificationResult     … 自動判定結果
-      (facePhoto=null なら 9秒 sleep→1回リトライ,
-       なお null なら RuntimeException)
-  * getIdDocumentInformation … ICカード読取情報
+  - getPhotos ... 画像データ取得
+  - getVerificationResult ... 自動判定結果
+    (facePhoto=null なら 9秒 sleep→1回リトライ,
+     なお null なら RuntimeException)
+  - getIdDocumentInformation ... ICカード読取情報
   いずれか失敗 → throw EkycRemoteApiException
-                (リクエスト読取失敗)
+  (リクエスト読取失敗)
 end note
 
 fork
@@ -40,7 +39,6 @@ end fork
 if (verificationResult == null?) then (yes)
   #ffdddd:return null;
   stop
-else (no)
 endif
 
 :checkTheVerificationResults\n自動判定結果チェック;
@@ -48,13 +46,11 @@ endif
 if (checkResult == FAIL?) then (yes)
   #ffdddd:return null;
   stop
-else (no)
 endif
 
 if (verificationJoinedData / photos が null?) then (yes)
   #ffdddd:return null;
   stop
-else (no)
 endif
 
 :storePhotosToICOS\n本人容貌画像を iCOS に保存;
@@ -67,20 +63,18 @@ end note
 :storeVerificationResultImageToICOS\n判定結果画像を iCOS に保存 → list 追加;
 note right
   Exception 発生時:
-  * JPKI(AB1202): InternalServerErrorException
-  * He  (AB1203): EkycRemoteApiException
+  - JPKI(AB1202): InternalServerErrorException
+  - He (AB1203): EkycRemoteApiException
 end note
 
 if (idDocumentInformation == null?) then (yes)
   #ffdddd:return null;
   stop
-else (no)
 endif
 
 if (list が null / 空?) then (yes)
   #ffdddd:return null;
   stop
-else (no)
 endif
 
 :storeRequestInformationToABA\n申請情報を ABA に登録;
@@ -92,11 +86,10 @@ else (法人 CORPORATE)
 endif
 
 :receptionNumber 受付番号 取得;
-
 note right
   ※ 末尾の getKycResult
-    (KYC結果登記API) は
-    現状 //TODO でコメントアウト
+  (KYC結果登記API) は
+  現状 //TODO でコメントアウト
 end note
 
 #ddffdd:return receptionNumber\nJsonResult.success;
