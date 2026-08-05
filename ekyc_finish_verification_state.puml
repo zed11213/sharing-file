@@ -1,34 +1,31 @@
 @startuml ekyc_finish_verification_state
-title eKYC 完了処理 (AB1202 JPKI / AB1203 He 共通) : 中央=正常系 / 左=throw 例外 / 右=return null
+title eKYC 完了処理 (AB1202 JPKI / AB1203 He 共通) : 中央=正常系 / 左右=異常系へ分岐
 
 skinparam shadowing false
 
 '==== 開始 ====
-[*] --> s0
+[*] --> d0
 
-state "申請情報を作成"       as s0 #e8f5ff
-state "申請情報登録API 呼出"  as s1 #e8f5ff
-s0 --> s1
+'==== パラメータチェック（不備は左へ） ====
+state d0 <<choice>>
+state "例外\n400 BadRequest" as ex400 #ffd8b0
+d0 -left-> ex400 : パラメータ不備
+d0 -down-> s1 : OK
 
-'==== 登録API：例外チェック（左へ） ====
-state e1 <<choice>>
-state "throw 例外"          as throw1 #ffd8b0
-s1 --> e1
-e1 -left-> throw1 : 例外発生
-e1 -down-> f1 : 正常
+'==== 申請情報登録API ====
+state "申請情報登録API 呼出" as s1 #e8f5ff
+state d1 <<choice>>
+state "return null" as null1 #ffdddd
+s1 --> d1
+d1 -right-> null1 : 登録失敗
+d1 -down-> s2 : 成功
 
-'==== 登録API：FAILチェック（右へ） ====
-state f1 <<choice>>
-state "return null"         as null1 #ffdddd
-f1 -right-> null1 : 登録 FAIL
-f1 -down-> s2 : 正常
-
-'==== 情報取得（allOf 並列） ====
-state "情報取得 (allOf で並列)" as s2 #e8f5ff
+'==== ekyc から情報取得（allOf 並列） ====
+state "ekyc から情報取得" as s2 #e8f5ff
 state fork1 <<fork>>
-state "画像取得\n(getPhotos)"                              as p1 #e8f5ff
-state "自動判定結果取得\n(getVerificationResult)\n※null時 9秒sleep→1回リトライ" as p2 #e8f5ff
-state "ICカード読取\n(getIdDocumentInformation)"           as p3 #e8f5ff
+state "画像取得API"                         as p1 #e8f5ff
+state "自動判定結果API\n(1秒間隔リトライ×59回)" as p2 #e8f5ff
+state "ICカード読取API"                      as p3 #e8f5ff
 s2 --> fork1
 fork1 --> p1
 fork1 --> p2
@@ -38,43 +35,33 @@ p1 --> join1
 p2 --> join1
 p3 --> join1
 
-'==== 取得失敗チェック（左へ） ====
-state e2 <<choice>>
-state "throw 例外\n(リクエスト読取失敗)" as throw2 #ffd8b0
-join1 --> e2
-e2 -left-> throw2 : いずれか例外／取得失敗
-e2 -down-> s3 : 正常
+'==== 取得成功チェック（失敗は左へ） ====
+state d2 <<choice>>
+state "throw 例外\n(リクエスト読取失敗)" as ex2 #ffd8b0
+join1 --> d2
+d2 -left-> ex2 : 取得失敗
+d2 -down-> s3 : 成功
 
-'==== 自動判定結果チェック（右へ） ====
-state "自動判定結果チェック"  as s3 #e8f5ff
-state f2 <<choice>>
-state "return null"         as null2 #ffdddd
-s3 --> f2
-f2 -right-> null2 : 判定結果なし／NG
-f2 -down-> s4 : OK
+'==== 本人画像を iCOS 保存 ====
+state "本人画像・判定結果画像を\niCOS 保存" as s3 #e8f5ff
+state d3 <<choice>>
+state "throw 例外\n(iCOS 保存失敗)" as ex3 #ffd8b0
+s3 --> d3
+d3 -right-> ex3 : 保存失敗
+d3 -down-> s4 : 保存成功
 
-'==== iCOS 保存チェック（左へ） ====
-state "本人画像・判定結果画像を\niCOS 保存" as s4 #e8f5ff
-state e3 <<choice>>
-state "throw 例外\n(iCOS 保存失敗)" as throw3 #ffd8b0
-s4 --> e3
-e3 -left-> throw3 : 保存失敗
-e3 -down-> s5 : 正常
-
-'==== 書類情報／画像チェック（右へ） ====
-state "書類情報／画像チェック" as s5 #e8f5ff
-state f3 <<choice>>
-state "return null"         as null3 #ffdddd
-s5 --> f3
-f3 -right-> null3 : 書類情報／画像なし
-f3 -down-> s6 : OK
+'==== 判定結果画像作成〜再保存 ====
+state "判定結果画像作成"              as s4 #e8f5ff
+state "本人画像・判定結果画像を\niCOS 保存" as s5 #e8f5ff
+s4 --> s5
 
 '==== ABA 登録〜正常終了 ====
-state "申請情報を ABA に登録\n(個人:登録 / 法人:更新)" as s6 #e8f5ff
-state "受付番号を取得"       as s7 #e8f5ff
-state "return 受付番号"      as done #ddffdd
+state "申請情報を ABA に登録\n(個人:登録 / 法人&個人事業主:更新)" as s6 #e8f5ff
+state "return 受付番号"        as s7 #ddffdd
+state "本人確認結果登録API"     as s8 #e8f5ff
+s5 --> s6
 s6 --> s7
-s7 --> done
-done --> [*]
+s7 --> s8
+s8 --> [*]
 
 @enduml
