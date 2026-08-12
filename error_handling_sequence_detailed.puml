@@ -1,0 +1,54 @@
+@startuml error_handling_sequence_detailed
+
+actor "用户" as User
+participant "RequestFragment\n(前端)" as FE
+participant "PolarifyKycSdk" as SDK
+participant "后台(Controller)" as BFF
+participant "RestTemplate" as RT
+participant "RestClientErrorHandler" as EH
+participant "后端服务(BA/ABA)" as BE
+
+User -> FE : 点击申し込みボタン
+activate FE
+FE -> FE : progressBar 显示(VISIBLE)
+FE -> SDK : ①getFaceVerification(matchingParameters)
+activate SDK
+
+SDK -> BFF : ②发起请求
+BFF -> RT : 调用后端接口
+RT -> BE : ③转发HTTP请求
+BE --> RT : 返回错误(4xx/5xx)
+RT -> EH : ④hasError()=true\n触发handleError()
+
+note over EH
+  解析Body,判断BA/ABA
+  组装errorCode/errorMsg
+end note
+
+EH --> BFF : ⑤抛出对应异常\n(如BadRequestException)
+BFF --> SDK : ⑥返回错误response
+
+alt 成功 onSuccess(results)
+    SDK --> FE : callback onSuccess(VerificationResults)
+    FE -> FE : requestButton.unlock()\nprogressBar 隐藏(INVISIBLE)
+    FE -> FE : Handler延迟1秒
+    FE -> FE : ⑦showSuccessDialog(results)
+    FE -> User : 展示成功 AlertDialog
+    User -> FE : 点击"OK"
+    FE -> SDK : deleteFace()\ndeleteMatchingData(parameters)
+    SDK --> FE : callback onSuccess/onError
+    FE -> FE : replaceFragment()
+    FE -> FE : 替换为 RequestResultFragment
+else 失败 onError(errorResult)
+    SDK --> FE : callback onError(ErrorResult)\n(含解析后的errorCode/errorMsg)
+    FE -> FE : requestButton.unlock()\nprogressBar 隐藏(INVISIBLE)
+    FE -> FE : Handler延迟1秒
+    FE -> FE : ⑧showErrorDialog(errorResult)
+    FE -> User : 展示错误 AlertDialog
+    User -> FE : 点击"OK"
+    FE -> FE : dialog.dismiss()
+end
+deactivate SDK
+deactivate FE
+
+@enduml
