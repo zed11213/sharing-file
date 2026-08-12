@@ -1,0 +1,67 @@
+@startuml error_handling_sequence_interceptor
+
+participant "前端\n(Repository/API层)" as FE
+participant "OkHttp\nResponseInterceptor" as RI
+participant "后台(Controller)" as BFF
+participant "RestTemplate" as RT
+participant "RestClientErrorHandler" as EH
+participant "后端服务(BA/ABA)" as BE
+participant "POPWindowsUtil\n(LiveData)" as POP
+participant "UI层\n(全局错误Dialog)" as UI
+
+FE -> RI : ①发起请求(chain.request())
+activate RI
+RI -> BFF : ②chain.proceed(request)
+BFF -> RT : 调用后端接口
+RT -> BE : ③转发HTTP请求
+BE --> RT : 返回错误(4xx/5xx)
+RT -> EH : ④hasError()=true\n触发handleError()
+
+note over EH
+  解析Body,判断BA/ABA
+  组装errorCode/errorMsg
+end note
+
+EH --> BFF : ⑤抛出对应异常\n(如BadRequestException)
+BFF --> RI : ⑥返回错误Response
+
+alt HTTP 200(且API_SERVICE_NAME=APIGW)
+    RI -> RI : newResponseCreate()\n解密响应体
+else HTTP 412(公開鍵/トークン期限切れ)
+    RI -> RI : RefreshLogic.az0903()\n刷新令牌
+    alt 刷新成功
+        RI -> BFF : signedRequest()\n重新签名并重试请求
+    else 刷新失败
+        RI -> RI : ⑦showErrorMsgDialog(it)
+    end
+else HTTP 426(APPバージョン更新)
+    RI -> RI : VersionUpdateUtil.postValue(errorCode, errorMessage)
+else HTTP 400 / 418 / 500
+    RI -> RI : ⑦showErrorMsgDialog(it)
+else HTTP 530(メンテナンス中)
+    RI -> POP : POPWindowsUtil.postValue(维护中消息)
+else 其他状态码(API_401_RETRY_FLAG=true)
+    RI -> RI : 解析ErrorResponseBean
+    RI -> POP : POPWindowsUtil.postValue(errorMsg)
+end
+
+note over RI
+  showErrorMsgDialog内部:
+  1.解析ErrorResponseBean(errorCode/errorMessage)
+  2.editErrorMsg()按API_SERVICE_NAME\n定制errorMsg/errorTitle
+end note
+
+alt errorCode == MBFS0008
+    RI -> RI : MBFS0008ErrorUtil.postValue(errorMsg)\n(交由Page层自行处理,不弹通用Dialog)
+else 其他errorCode
+    RI -> POP : POPWindowsUtil.postValue(errorMsg, errorTitle, errorCode)
+end
+
+deactivate RI
+
+RI --> FE : (网络层异常IOException时)\nonFailure: 非Canceled则同样调用POPWindowsUtil.postValue
+
+POP -> UI : ⑧通知LiveData变化
+UI -> UI : ⑨展示错误 AlertDialog
+
+@enduml
