@@ -1,0 +1,30 @@
+@startuml error_handling_sequence
+
+participant "前端(Fragment/App)" as FE
+participant "后台(Controller)" as BFF
+participant "RestTemplate" as RT
+participant "RestClientErrorHandler" as EH
+participant "后端服务(BA/ABA)" as BE
+
+FE -> BFF : ①发起请求
+BFF -> RT : 调用后端接口
+RT -> BE : ②转发HTTP请求
+BE --> RT : 返回错误(4xx/5xx)
+RT -> EH : ③hasError()=true\n触发handleError()
+
+note over EH
+  解析Body,判断BA/ABA
+  组装errorCode/errorMsg
+end note
+
+EH --> BFF : ④抛出对应异常\n(如BadRequestException)
+BFF --> FE : ⑤返回错误response
+
+note over FE
+  前端错误处理逻辑
+  接收并解析response
+end note
+
+FE -> FE : ⑥展示AlertDialog
+
+@enduml
