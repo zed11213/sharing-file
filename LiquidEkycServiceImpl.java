@@ -260,6 +260,12 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             logger.error("ekyc requestInformation EkycRemoteApiException errorCode={} message={}", e.getErrorCode(),
                     e.getMessage());
             throw e;
+        } catch (RestClientResponseException e) {
+            // eKYC通信エラー（申請情報登録APIが409等のHTTPエラーを返す場合）は一部リトライ可能として MBAP1300 を返す
+            logger.error("ekyc requestInformation HTTPエラー statusCode={} responseBody={}", e.getRawStatusCode(),
+                    e.getResponseBodyAsString(), e);
+            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
+                    "申請情報登録API通信エラー:" + e.getRawStatusCode());
         } catch (Exception e) {
             logger.error("ekyc requestInformation Exception message={}", e.getMessage(), e);
             throw e;
@@ -693,14 +699,14 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         }
         requestDto.setApplicantId(applicantId);
 
-        if (StringUtils.isBlank(lastName)) {
-            logger.info("ekyc lastName is null");
+        // パラメータチェック：姓または名が空の場合はリトライ不可（MBAP1301）。
+        // 通常はフロント側でチェック済みのため、ユーザーがこのエラーを見ることは想定しない。
+        if (StringUtils.isBlank(lastName) || StringUtils.isBlank(firstName)) {
+            logger.error("ekyc パラメータチェックエラー：姓または名が空 applicantId={} lastNameBlank={} firstNameBlank={}",
+                    applicantId, StringUtils.isBlank(lastName), StringUtils.isBlank(firstName));
+            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1301, "姓または名が空");
         }
         requestDto.setLastName(lastName);
-
-        if (StringUtils.isBlank(firstName)) {
-            logger.info("ekyc firstName is null");
-        }
         requestDto.setFirstName(firstName);
 
         requestDto.setMiddleName(middleName);
@@ -922,11 +928,19 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             }
         }
 
-        // ③ 生成した本人確認結果画像：失敗時は中断
+        // ③-1 結果画像作成：データ不備等で失敗した場合はリトライ不可として MBAP1300 を返す
+        String base64;
         try {
             logger.info(applicantId + " " + "結果画像作成 start");
-            String base64 = GenerateVerificationResultUtils.createBase64WithVerification(data, apiInterface);
+            base64 = GenerateVerificationResultUtils.createBase64WithVerification(data, apiInterface);
             logger.info(applicantId + " " + "結果画像作成 end");
+        } catch (Exception e) {
+            logger.error(applicantId + " 結果画像作成 failed:" + e.getMessage(), e);
+            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300, "結果画像作成失敗");
+        }
+
+        // ③-2 結果画像アップロード：既存の処理を踏襲し、失敗時は中断
+        try {
             if (!StringUtils.isBlank(base64)) {
                 IdentityVerificationDocumentsDto resultDoc = uploadImageToICOS(applicantId, null, base64,
                         VERFICATION_RESULT_TYPE, index);
