@@ -259,6 +259,12 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             logger.error("ekyc requestInformation EkycRemoteApiException errorCode={} message={}", e.getErrorCode(),
                     e.getMessage());
             throw e;
+        } catch (RestClientResponseException e) {
+            // eKYC通信エラー（申請情報登録APIが409等のHTTPエラーを返す場合）は一部リトライ可能として MBAP1300 を返す
+            logger.error("ekyc requestInformation HTTPエラー statusCode={} responseBody={}", e.getRawStatusCode(),
+                    e.getResponseBodyAsString(), e);
+            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
+                    "申請情報登録API通信エラー:" + e.getRawStatusCode());
         } catch (Exception e) {
             logger.error("ekyc requestInformation Exception message={}", e.getMessage(), e);
             throw e;
@@ -507,6 +513,9 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
                 logger.info("setFinishVerificationWithJpki storeVerificationResultImageToICOS done, objrctPath={}",
                         verificationResultDocument.getObjectPath());
             }
+        } catch (InternalServerErrorException e) {
+            // 結果画像作成(MBAP1300)・アップロード(EKYC0001)のエラーコードをそのまま伝播する
+            throw e;
         } catch (Exception e) {
             logger.info("setFinishVerificationWithJpki storeVerificationResultImageToICOS failed:" + e.getMessage());
             logger.info("setFinishVerificationWithJpki storeVerificationResultImageToICOS failed:", e);
@@ -647,6 +656,9 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
                 logger.info("setFinishVerificationWithJpki storeVerificationResultImageToICOS done, objrctPath={}",
                         verificationResultDocument.getObjectPath());
             }
+        } catch (InternalServerErrorException e) {
+            // 結果画像作成(MBAP1300)・アップロード(EKYC0001)のエラーコードをそのまま伝播する
+            throw e;
         } catch (Exception e) {
             logger.info("setFinishVerificationWithJpki storeVerificationResultImageToICOS failed:" + e.getMessage());
             logger.info("setFinishVerificationWithJpki storeVerificationResultImageToICOS failed:", e);
@@ -731,14 +743,14 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         }
         requestDto.setApplicantId(applicantId);
 
-        if (StringUtils.isBlank(lastName)) {
-            logger.info("ekyc lastName is null");
+        // パラメータチェック：姓または名が空の場合はリトライ不可（MBAP1301）。
+        // 通常はフロント側でチェック済みのため、ユーザーがこのエラーを見ることは想定しない。
+        if (StringUtils.isBlank(lastName) || StringUtils.isBlank(firstName)) {
+            logger.error("ekyc パラメータチェックエラー：姓または名が空 applicantId={} lastNameBlank={} firstNameBlank={}",
+                    applicantId, StringUtils.isBlank(lastName), StringUtils.isBlank(firstName));
+            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1301, "姓または名が空");
         }
         requestDto.setLastName(lastName);
-
-        if (StringUtils.isBlank(firstName)) {
-            logger.info("ekyc firstName is null");
-        }
         requestDto.setFirstName(firstName);
 
         requestDto.setMiddleName(middleName);
@@ -971,9 +983,16 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
     private IdentityVerificationDocumentsDto storeVerificationResultImageToICOS(EkycVerificationJoinedData data,
             int index, String apiInterface) throws Exception {
         String applicantId = data.getRequestInformation().getApplicantId();
-        logger.info(applicantId + " " + "結果画像作成 start");
-        String base64 = GenerateVerificationResultUtils.createBase64WithVerification(data, apiInterface);
-        logger.info(applicantId + " " + "結果画像作成 end");
+        // 結果画像作成：データ不備等で失敗した場合はリトライ不可として MBAP1300 を返す
+        String base64;
+        try {
+            logger.info(applicantId + " " + "結果画像作成 start");
+            base64 = GenerateVerificationResultUtils.createBase64WithVerification(data, apiInterface);
+            logger.info(applicantId + " " + "結果画像作成 end");
+        } catch (Exception e) {
+            logger.error(applicantId + " 結果画像作成 failed:" + e.getMessage(), e);
+            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300, "結果画像作成失敗");
+        }
         if (StringUtils.isBlank(base64)) {
             logger.info("result image is blank");
             return null;
