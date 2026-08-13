@@ -1,0 +1,57 @@
+@startuml eKYC_error_sequence
+title eKYC エラー処理 時序図（前端 bankingapp ⇔ 後端 bff）
+
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 260
+skinparam ParticipantPadding 12
+autonumber
+
+actor       ユーザー           as U
+participant "前端 Logic/ViewModel\n(MBCO0405Logic)"      as L
+participant "RestService(Retrofit)\nAB1202/AB1203"       as API
+participant "RequestInterceptor"                          as REQ
+participant "ResponseInterceptor\n《前端エラー処理の中心》" as RESP
+participant "LiquidEkycController"                        as C
+participant "LiquidEkycServiceImpl"                       as S
+participant "GlobalExceptionHandler\n《後端エラー処理の中心》" as GEH
+participant "POPWindowsUtil/Logic"                        as POP
+participant "ImageHeadDialog\n(AlertDialog)"              as D
+
+== (1) 前端请求到后台 ==
+U  -> L   : 操作（本人確認完了 等）
+L  -> API : webService.AB1202()
+API -> REQ: intercept() 署名・ヘッダ付与
+REQ -> RESP: intercept() -> interceptSuspend()
+RESP -> C : chain.proceed()  HTTP POST /ekyc/AB1202
+
+== (2) 后台处理 request ==
+C -> S : setFinishVerificationWithJpki(req)
+S -> S : createRequestInformationDto() /\nrequestInformation() / storeAllImagesToICOS()
+
+== (3) 后台遇到错误 -> 抛给错误处理 ==
+S -->> C  : throw InternalServerErrorException\n(MBAP1301 / MBAP1300 / EKYC0001)
+C -->> GEH: 例外が伝播（Spring が @ExceptionHandler へ委譲）
+
+== (4) 错误处理组装 response 返回前端 ==
+GEH -> GEH : switch(code) -> createErrorResultWithErrorCode()
+GEH -> GEH : MessageUtils.getMessageText(msgId)
+GEH -->> RESP : HTTP 400/500 +\nJSON ErrorResult{errorCode, errorMessage}
+
+== (5) 前端接到错误 -> 转给错误处理 ==
+RESP -> RESP : when(code){400,418,500} -> showErrorMsgDialog()
+RESP -> RESP : peekBody().fromJson<ErrorResponseBean>()
+RESP -> RESP : editErrorMsg()《JagErrorCodeで判定》\nMB系はBFFのerrorMessageをそのまま採用
+RESP -> POP  : POPWindowsUtil.postValue(msg, title, errorCode)
+
+== (6) 展示 Dialog ==
+POP -> POP : POPWindowsLogic.openErrorDialog()
+POP -> D   : ImageHeadDialog(AlertDialog) 描画
+D -->> U   : エラーダイアログ表示
+
+note over L, RESP
+  ※ Logic側 flow.catch{ ErrorUtil.apiErrorCatch() } は
+  ネットワーク例外専用。HTTP 4xx/5xx は
+  ResponseInterceptor が一元処理するため通らない
+end note
+
+@enduml
