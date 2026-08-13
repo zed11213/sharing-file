@@ -56,6 +56,7 @@ import jp.co.jsbank.mobile.bff.common.util.GenerateVerificationResultUtils;
 
 import org.springframework.beans.factory.annotation.Value;
 
+import jp.co.jsbank.mobile.bff.dto.FileStreamDto;
 import jp.co.jsbank.mobile.bff.dto.IdentityVerificationDocumentsDto;
 import jp.co.jsbank.mobile.bff.dto.aba.AccountOpenAppliContentRegistrationIndividualAbaRequestDto;
 import jp.co.jsbank.mobile.bff.dto.aba.AccountOpenAppliContentUpdateCorporationAbaRequestDto;
@@ -259,12 +260,6 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             logger.error("ekyc requestInformation EkycRemoteApiException errorCode={} message={}", e.getErrorCode(),
                     e.getMessage());
             throw e;
-        } catch (RestClientResponseException e) {
-            // eKYC通信エラー（申請情報登録APIが409等のHTTPエラーを返す場合）は一部リトライ可能として MBAP1300 を返す
-            logger.error("ekyc requestInformation HTTPエラー statusCode={} responseBody={}", e.getRawStatusCode(),
-                    e.getResponseBodyAsString(), e);
-            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
-                    "申請情報登録API通信エラー:" + e.getRawStatusCode());
         } catch (Exception e) {
             logger.error("ekyc requestInformation Exception message={}", e.getMessage(), e);
             throw e;
@@ -295,6 +290,13 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
                     EkycGetPhotosResponseDto.class);
 
             logger.info(applicantId + " " + "画像データ取得API end");
+            if (response.getIdDocumentPhotos() == null) {
+                logger.info(applicantId + " " + " IdDocumentPhotos is null");
+            } else {
+                for (EkycPhotosInformationDto documentPhoto : response.getIdDocumentPhotos()) {
+                    logger.info(applicantId + " " + "FileName = " + documentPhoto.getFileName());
+                }
+            }
 
         } catch (EkycRemoteApiException e) {
             throw e;
@@ -491,36 +493,10 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             return null;
         }
 
-        List<IdentityVerificationDocumentsDto> list = null;
-
-        try {
-            list = storePhotosToICOS(verificationJoinedData);
-            logger.info("setFinishVerificationWithJpki storePhotosToICOS done, list size={}",
-                    list != null ? list.size() : 0);
-        } catch (Exception e) {
-            EkycApiErrorCode apiErroCode = EkycApiErrorCode.getLocaleError();
-            logger.error("setFinishVerificationWithJpki storePhotosToICOS failed, apiErroCode={}",
-                    apiErroCode.getDescription(), e);
-            throw new EkycRemoteApiException(HttpStatus.INTERNAL_SERVER_ERROR.value(), apiErroCode, "",
-                    "Failed to store iCOS");
-        }
-
-        try {
-            IdentityVerificationDocumentsDto verificationResultDocument = storeVerificationResultImageToICOS(
-                    verificationJoinedData, list.size() + 1, ekycApiInterface);
-            if (Objects.nonNull(verificationResultDocument)) {
-                list.add(verificationResultDocument);
-                logger.info("setFinishVerificationWithJpki storeVerificationResultImageToICOS done, objrctPath={}",
-                        verificationResultDocument.getObjectPath());
-            }
-        } catch (InternalServerErrorException e) {
-            // 結果画像作成(MBAP1300)・アップロード(EKYC0001)のエラーコードをそのまま伝播する
-            throw e;
-        } catch (Exception e) {
-            logger.info("setFinishVerificationWithJpki storeVerificationResultImageToICOS failed:" + e.getMessage());
-            logger.info("setFinishVerificationWithJpki storeVerificationResultImageToICOS failed:", e);
-            throw new InternalServerErrorException(ErrorCodeConstant.EKYC_ERROR_CODE_0001, "ICOSへの書き込み失敗");
-        }
+        List<IdentityVerificationDocumentsDto> list = storeAllImagesToICOS(verificationJoinedData, finishVerification,
+                ekycApiInterface);
+        logger.info("setFinishVerificationWithJpki storeAllImagesToICOS done, list size={}",
+                list != null ? list.size() : 0);
 
         if (Objects.isNull(verificationJoinedData.getIdDocumentInformation())) {
             logger.error("setFinishVerificationWithJpki getIdDocumentInformation is null");
@@ -528,7 +504,7 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         }
 
         if (Objects.isNull(list) || list.isEmpty()) {
-            logger.error("setFinishVerificationWithJpki storePhotosToICOS list is null or empty");
+            logger.error("setFinishVerificationWithJpki storeAllImagesToICOS list is null or empty");
             return null;
         }
 
@@ -634,36 +610,10 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             return null;
         }
 
-        List<IdentityVerificationDocumentsDto> list = null;
-
-        try {
-            list = storePhotosToICOS(verificationJoinedData);
-            logger.info("setFinishVerificationWithJpki storePhotosToICOS done, list size={}",
-                    list != null ? list.size() : 0);
-        } catch (Exception e) {
-            EkycApiErrorCode apiErroCode = EkycApiErrorCode.getLocaleError();
-            logger.error("setFinishVerificationWithJpki storePhotosToICOS failed, apiErroCode={}",
-                    apiErroCode.getDescription(), e);
-            throw new EkycRemoteApiException(HttpStatus.INTERNAL_SERVER_ERROR.value(), apiErroCode, "",
-                    "Failed to store iCOS");
-        }
-
-        try {
-            IdentityVerificationDocumentsDto verificationResultDocument = storeVerificationResultImageToICOS(
-                    verificationJoinedData, list.size() + 1, ekycApiInterface);
-            if (Objects.nonNull(verificationResultDocument)) {
-                list.add(verificationResultDocument);
-                logger.info("setFinishVerificationWithJpki storeVerificationResultImageToICOS done, objrctPath={}",
-                        verificationResultDocument.getObjectPath());
-            }
-        } catch (InternalServerErrorException e) {
-            // 結果画像作成(MBAP1300)・アップロード(EKYC0001)のエラーコードをそのまま伝播する
-            throw e;
-        } catch (Exception e) {
-            logger.info("setFinishVerificationWithJpki storeVerificationResultImageToICOS failed:" + e.getMessage());
-            logger.info("setFinishVerificationWithJpki storeVerificationResultImageToICOS failed:", e);
-            throw new InternalServerErrorException(ErrorCodeConstant.EKYC_ERROR_CODE_0001, "ICOSへの書き込み失敗");
-        }
+        List<IdentityVerificationDocumentsDto> list = storeAllImagesToICOS(verificationJoinedData, finishVerification,
+                ekycApiInterface);
+        logger.info("setFinishVerificationWithHe storeAllImagesToICOS done, list size={}",
+                list != null ? list.size() : 0);
 
         if (Objects.isNull(verificationJoinedData.getIdDocumentInformation())) {
             logger.error("setFinishVerificationWithJpki getIdDocumentInformation is null");
@@ -671,7 +621,7 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         }
 
         if (Objects.isNull(list) || list.isEmpty()) {
-            logger.error("setFinishVerificationWithJpki storePhotosToICOS list is null or empty");
+            logger.error("setFinishVerificationWithHe storeAllImagesToICOS list is null or empty");
             return null;
         }
 
@@ -743,14 +693,14 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         }
         requestDto.setApplicantId(applicantId);
 
-        // パラメータチェック：姓または名が空の場合はリトライ不可（MBAP1301）。
-        // 通常はフロント側でチェック済みのため、ユーザーがこのエラーを見ることは想定しない。
-        if (StringUtils.isBlank(lastName) || StringUtils.isBlank(firstName)) {
-            logger.error("ekyc パラメータチェックエラー：姓または名が空 applicantId={} lastNameBlank={} firstNameBlank={}",
-                    applicantId, StringUtils.isBlank(lastName), StringUtils.isBlank(firstName));
-            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1301, "姓または名が空");
+        if (StringUtils.isBlank(lastName)) {
+            logger.info("ekyc lastName is null");
         }
         requestDto.setLastName(lastName);
+
+        if (StringUtils.isBlank(firstName)) {
+            logger.info("ekyc firstName is null");
+        }
         requestDto.setFirstName(firstName);
 
         requestDto.setMiddleName(middleName);
@@ -914,196 +864,120 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
     }
 
     /**
-     * 本人容貌画像をICOSに保存すること。
+     * ①ekyc取得の本人容貌画像、②前端連携のカード内保存人物画像（空可）、③生成した結果画像の
+     * 3種類の画像アップロードを1つにまとめる。ファイル名生成は既存ロジックに統一。
+     * 失敗時の挙動は従来通り：①③は中断、②は握りつぶして継続。
      */
-    private List<IdentityVerificationDocumentsDto> storePhotosToICOS(EkycVerificationJoinedData data) throws Exception {
-        
+    private List<IdentityVerificationDocumentsDto> storeAllImagesToICOS(EkycVerificationJoinedData data,
+            EkycFinishVerificationRequestDto requestDto, String apiInterface) {
+
         List<IdentityVerificationDocumentsDto> list = new ArrayList<>();
-        int fileIndex = 1;
+        String applicantId = data.getRequestInformation().getApplicantId();
+        int index = 1;
 
+        // ① ekyc取得の本人容貌画像（正面）：失敗時は中断
         if (Objects.nonNull(data) && data.photoIsExist()) {
-            logger.info(data.getRequestInformation().getApplicantId() + " " + "本人容貌画像アップロード start");
-
-            EkycGetPhotosResponseDto photos = data.getPhotos();
-            EkycCommonPhotoDto facePhoto = photos.getFaceFrontPhoto();
-            List<EkycPhotosInformationDto> idDocumentsPhotos = photos.getIdDocumentPhotos();
-            // List<EkycPhotosInformationDto> idDocumentsPhotos =
-            // photos.getIdDocumentPhotos();
-
-            if (!StringUtils.isBlank(facePhoto.getImage()) && !StringUtils.isBlank(facePhoto.getFileName())) {
-
-                IdentityVerificationDocumentsDto faceIdentityDocument = storeFaceImage(facePhoto, fileIndex);
-                // 本人確認書類追加
-                list.add(faceIdentityDocument);
-                fileIndex++;
-            }
-            logger.info(data.getRequestInformation().getApplicantId() + " " + "本人容貌画像アップロード end");
-
-            if (Objects.nonNull(data.getIdDocumentInformation())
-                    && Objects.nonNull(data.getIdDocumentInformation().getIdFacePhoto())) {
-
-                EkycCommonPhotoDto idFacePhoto = data.getIdDocumentInformation().getIdFacePhoto();
-
-                if (!StringUtils.isBlank(idFacePhoto.getImage())
-                        && !StringUtils.isBlank(idFacePhoto.getFileName())) {
-
-                    try {
-                        logger.info(data.getRequestInformation().getApplicantId() + " " + "ICカード顔写真アップロード start");
-                        IdentityVerificationDocumentsDto idFaceIdentityDocuments = storeFaceImage(idFacePhoto,
-                                fileIndex);
-                        list.add(idFaceIdentityDocuments);
-                        fileIndex++;
-                        logger.info(data.getRequestInformation().getApplicantId() + " " + "ICカード顔写真アップロード end");
-                    } catch (Exception e) {
-                        logger.info(data.getRequestInformation().getApplicantId() + " " + "ICカード顔写真アップロード failed", e);
+            EkycCommonPhotoDto facePhoto = data.getPhotos().getFaceFrontPhoto();
+            if (Objects.nonNull(facePhoto) && !StringUtils.isBlank(facePhoto.getImage())
+                    && !StringUtils.isBlank(facePhoto.getFileName())) {
+                logger.info(applicantId + " " + "本人容貌画像アップロード start");
+                try {
+                    String imagePayload = facePhoto.getImage();
+                    int commaIndex = imagePayload.indexOf(',');
+                    if (imagePayload.startsWith("data:") && commaIndex != -1) {
+                        imagePayload = imagePayload.substring(commaIndex + 1);
                     }
+                    IdentityVerificationDocumentsDto faceDoc = uploadImageToICOS(applicantId,
+                            facePhoto.getFileName(), imagePayload, FACE_PHOTO_TYPE, index);
+                    list.add(faceDoc);
+                    index++;
+                } catch (Exception e) {
+                    EkycApiErrorCode apiErroCode = EkycApiErrorCode.getLocaleError();
+                    logger.error(applicantId + " 本人容貌画像アップロード failed, apiErroCode={}",
+                            apiErroCode.getDescription(), e);
+                    throw new EkycRemoteApiException(HttpStatus.INTERNAL_SERVER_ERROR.value(), apiErroCode, "",
+                            "Failed to store iCOS");
+                }
+                logger.info(applicantId + " " + "本人容貌画像アップロード end");
+            }
+        }
+
+        // ② 前端から連携されたカード内保存の人物画像（空の可能性あり）：失敗時は握りつぶして継続
+        List<FileStreamDto> fileStreams = requestDto.getFileStreams();
+        if (Objects.nonNull(fileStreams) && !fileStreams.isEmpty()) {
+            for (FileStreamDto fileStreamDto : fileStreams) {
+                if (!StringUtils.isBlank(fileStreamDto.getFileStream())) {
+                    logger.info(applicantId + " " + "ファイルストリーム アップロード start");
+                    try {
+                        IdentityVerificationDocumentsDto cardDoc = uploadImageToICOS(applicantId,
+                                fileStreamDto.getFileName(), fileStreamDto.getFileStream(),
+                                VERFICATION_RESULT_TYPE, index);
+                        list.add(cardDoc);
+                        index++;
+                    } catch (Exception e) {
+                        logger.info(applicantId + " ファイルストリーム アップロード failed", e);
+                    }
+                    logger.info(applicantId + " " + "ファイルストリーム アップロード end");
                 }
             }
-
-            // try {
-            //     logger.info(data.getRequestInformation().getApplicantId() + " " + "ICカード画像アップロード start");
-            //     for (EkycPhotosInformationDto documentPhoto : idDocumentsPhotos) {
-            //         if (!StringUtils.isBlank(documentPhoto.getImage())
-            //                 && !StringUtils.isBlank(documentPhoto.getFileName())) {
-            //             IdentityVerificationDocumentsDto idDocumentIdentityDocument = storeDocumentsPhotos(
-            //                     documentPhoto,
-            //                     fileIndex);
-            //             list.add(idDocumentIdentityDocument);
-            //             fileIndex++;
-            //         }
-            //     }
-            //     logger.info(data.getRequestInformation().getApplicantId() + " " + "ICカード画像アップロード end");
-            // } catch (Exception e) {
-            //     logger.info(data.getRequestInformation().getApplicantId() + " " + "ICカード画像アップロード failed", e);
-            // }
         }
-        return list;
-    }
 
-    private IdentityVerificationDocumentsDto storeVerificationResultImageToICOS(EkycVerificationJoinedData data,
-            int index, String apiInterface) throws Exception {
-        String applicantId = data.getRequestInformation().getApplicantId();
-        // 結果画像作成：データ不備等で失敗した場合はリトライ不可として MBAP1300 を返す
-        String base64;
+        // ③ 生成した本人確認結果画像：失敗時は中断
         try {
             logger.info(applicantId + " " + "結果画像作成 start");
-            base64 = GenerateVerificationResultUtils.createBase64WithVerification(data, apiInterface);
+            String base64 = GenerateVerificationResultUtils.createBase64WithVerification(data, apiInterface);
             logger.info(applicantId + " " + "結果画像作成 end");
+            if (!StringUtils.isBlank(base64)) {
+                IdentityVerificationDocumentsDto resultDoc = uploadImageToICOS(applicantId, null, base64,
+                        VERFICATION_RESULT_TYPE, index);
+                list.add(resultDoc);
+                index++;
+            } else {
+                logger.info("result image is blank");
+            }
         } catch (Exception e) {
-            logger.error(applicantId + " 結果画像作成 failed:" + e.getMessage(), e);
-            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300, "結果画像作成失敗");
-        }
-        if (StringUtils.isBlank(base64)) {
-            logger.info("result image is blank");
-            return null;
-        }
-
-        String deviceId = "sm" + RequestHeaderContext.getInstance().getDeviceId().toLowerCase().replaceAll("-", "");
-        String timeStamp = String.valueOf(System.currentTimeMillis());
-        String fileName = timeStamp + "-" + index + "-" + deviceId + ".jpeg";
-
-        logger.info(applicantId + " " + "結果画像アップロード start");
-
-        try {
-            icosHandler.addFile(fileName, base64);
-        } catch (Exception e) {
-            logger.debug("ekyc ファイルストリーム" + fileName + "failed");
+            logger.info(applicantId + " 結果画像アップロード failed:" + e.getMessage());
+            logger.info(applicantId + " 結果画像アップロード failed:", e);
             throw new InternalServerErrorException(ErrorCodeConstant.EKYC_ERROR_CODE_0001, "ICOSへの書き込み失敗");
         }
 
-        logger.info(applicantId + " " + "結果画像アップロード end");
-
-        IdentityVerificationDocumentsDto identityDocument = new IdentityVerificationDocumentsDto();
-        identityDocument.setDocumentsType(VERFICATION_RESULT_TYPE);
-        identityDocument.setEndPoint(icosPublicEndpoint);
-        identityDocument.setBucket(icosBucketName);
-        identityDocument.setObjectPath(fileName);
-
-        return identityDocument;
+        return list;
     }
 
-    private IdentityVerificationDocumentsDto storeFaceImage(EkycCommonPhotoDto photo, int index) throws Exception {
+    /**
+     * 画像を1件 ICOS へアップロードし、本人確認書類DTOを組み立てて返す。
+     * ファイル名は buildIcosFileName に統一。アップロード失敗時は例外を上位へ伝播する。
+     */
+    private IdentityVerificationDocumentsDto uploadImageToICOS(String applicantId, String originalFileName,
+            String payload, String documentType, int index) throws Exception {
 
-        String fileName = photo.getFileName();
+        String fileName = buildIcosFileName(originalFileName, index);
 
-        logger.info("original fileName is :" + fileName);
-        // ファイル名編集
-        fileName = replaceFileName(fileName, index);
+        logger.info(applicantId + " ファイルストリーム:" + fileName + " start");
+        icosHandler.addFile(fileName, payload);
+        logger.info(applicantId + " ファイルストリーム:" + fileName + " end");
 
-        logger.info("ファイルストリーム:" + fileName + " start");
-
-        try {
-            String imagePayload = photo.getImage();
-            int commaIndex = imagePayload.indexOf(',');
-            if (imagePayload.startsWith("data:") && commaIndex != -1) {
-                imagePayload = imagePayload.substring(commaIndex + 1);
-            }
-            icosHandler.addFile(fileName, imagePayload);
-        } catch (Exception e) {
-            logger.info("ekyc ファイルストリーム" + fileName + " failed");
-            logger.info("ekyc error = " + e.getMessage());
-            throw new RuntimeException(e);
-        }
-
-        logger.info("ファイルストリーム:" + fileName + " end");
-
-        // 本人確認書類DTO
         IdentityVerificationDocumentsDto identityDocument = new IdentityVerificationDocumentsDto();
-
-        // 書類種類設定 "04": "個人撮影（顔）"
-        identityDocument.setDocumentsType(FACE_PHOTO_TYPE);
-
-        // エンドポイント設定
-        identityDocument.setEndPoint(icosPublicEndpoint);
-        // バケット設定
-        identityDocument.setBucket(icosBucketName);
-        // オブジェクトパス設定
-        identityDocument.setObjectPath(fileName);
-        // 本人確認書類追加
-        return identityDocument;
-
-    }
-
-    private IdentityVerificationDocumentsDto storeDocumentsPhotos(EkycPhotosInformationDto documentsPhoto, int index)
-            throws Exception {
-
-        String fileName = documentsPhoto.getFileName();
-
-        logger.debug("original fileName is :" + fileName);
-        // ファイル名編集
-        fileName = replaceFileName(fileName, index);
-
-        logger.debug("ファイルストリーム:" + fileName + " start");
-
-        try {
-            icosHandler.addFile(fileName, documentsPhoto.getImage());
-        } catch (Exception e) {
-            logger.debug("ファイルストリーム" + fileName + " failed");
-            throw new RuntimeException(e);
-        }
-
-        logger.debug("ファイルストリーム:" + fileName + " end");
-
-        // 本人確認書類DTO
-        IdentityVerificationDocumentsDto identityDocument = new IdentityVerificationDocumentsDto();
-        // 書類種類設定
-        // 画像種別利用
-        // * 01：表面（パスポート以外）
-        // * 02：裏面（パスポート以外）
-        // * 03：斜め（パスポート以外）
-        String documentType = documentsPhoto.getPhotoType();
-
         identityDocument.setDocumentsType(documentType);
-
-        // エンドポイント設定
         identityDocument.setEndPoint(icosPublicEndpoint);
-        // バケット設定
         identityDocument.setBucket(icosBucketName);
-        // オブジェクトパス設定
         identityDocument.setObjectPath(fileName);
-
         return identityDocument;
+    }
 
+    /**
+     * アップロードファイル名を生成する。
+     * 元ファイル名がある場合は既存の replaceFileName ロジックを流用し、
+     * 無い場合（結果画像など）は「タイムスタンプ-index-端末ID.jpeg」で組み立てる。
+     */
+    private String buildIcosFileName(String originalFileName, int index) {
+        if (StringUtils.isBlank(originalFileName)) {
+            String deviceId = "sm"
+                    + RequestHeaderContext.getInstance().getDeviceId().toLowerCase().replaceAll("-", "");
+            String timeStamp = String.valueOf(System.currentTimeMillis());
+            return timeStamp + "-" + index + "-" + deviceId + ".jpeg";
+        }
+        return replaceFileName(originalFileName, index);
     }
 
     private String storeRequestInformationToABA(EkycFinishVerificationRequestDto finishVerification,
