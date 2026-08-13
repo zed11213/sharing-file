@@ -1,5 +1,5 @@
 @startuml response-class-diagram
-title 两种 Response 获取方式 · 类图
+title レスポンス取得の2方式・クラス図
 
 left to right direction
 skinparam classAttributeIconSize 0
@@ -10,7 +10,7 @@ interface Controller <<RestController>>
 interface SignUpService
 interface LiquidEkycService
 
-' ===== 路径一：框架自动反序列化 =====
+' ===== 方式1：フレームワークによる自動デシリアライズ =====
 class SignUpLogicImpl {
   - RestClientConfig restClientConfig
   - GetIdByTokenHandler getIdByTokenHandler
@@ -33,7 +33,7 @@ class RestClientErrorHandler {
   + handleError(resp) : void
 }
 
-' ===== 路径二：SDK 手动反序列化 =====
+' ===== 方式2：SDKによる手動デシリアライズ =====
 class LiquidEkycServiceImpl {
   - EkycSdkClient ekycClient
   - getPhotos(id) : EkycGetPhotosResponseDto
@@ -58,22 +58,22 @@ Controller --> LiquidEkycService
 SignUpService <|.. SignUpLogicImpl
 LiquidEkycService <|.. LiquidEkycServiceImpl
 
-SignUpLogicImpl --> RestClientConfig : 注入
-RestClientConfig ..> RestTemplate : 生产 @Primary
+SignUpLogicImpl --> RestClientConfig : インジェクション
+RestClientConfig ..> RestTemplate : 生成 @Primary
 RestClientConfig --> RestClientErrorHandler : setErrorHandler
-SignUpLogicImpl ..> ParameterBuilder : 装配请求
-SignUpLogicImpl --> RestTemplate : exchange() 取 getBody()
+SignUpLogicImpl ..> ParameterBuilder : リクエスト組立
+SignUpLogicImpl --> RestTemplate : exchange() で getBody()
 
-EkycClientConfig ..> EkycSdkClient : 生产 @Bean
+EkycClientConfig ..> EkycSdkClient : 生成 @Bean
 LiquidEkycServiceImpl --> EkycSdkClient : execute()
-EkycSdkClient ..> RestTemplate : 内部私有实例
-EkycSdkClient ..> ErrorResult : 解析错误体
-EkycSdkClient ..> EkycRemoteApiException : 抛出
+EkycSdkClient ..> RestTemplate : 内部専用インスタンス
+EkycSdkClient ..> ErrorResult : エラーボディ解析
+EkycSdkClient ..> EkycRemoteApiException : スロー
 
 legend right
-  实线 = 依赖 / 注入调用
-  虚线 = 生产 / 使用
-  空心三角 = 实现接口
+  実線 = 依存 / インジェクション呼び出し
+  破線 = 生成 / 利用
+  白抜き三角 = インタフェース実装
 endlegend
 
 @enduml
