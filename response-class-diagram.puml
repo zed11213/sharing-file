@@ -1,0 +1,79 @@
+@startuml response-class-diagram
+title 两种 Response 获取方式 · 类图
+
+left to right direction
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam roundcorner 8
+
+interface Controller <<RestController>>
+interface SignUpService
+interface LiquidEkycService
+
+' ===== 路径一：框架自动反序列化 =====
+class SignUpLogicImpl {
+  - RestClientConfig restClientConfig
+  - GetIdByTokenHandler getIdByTokenHandler
+  + authAccountInfo(dto) : AuthAccountInfoAbaResponseDto
+  + cifInfoInquiry(dto) : CifInquiryAbaResponseDto
+  + baCifInquiry(dto) : CifInquiryBaResponseDto
+}
+class RestClientConfig {
+  + simpleRestTemplate() : RestTemplate
+}
+class RestTemplate {
+  + exchange(url, m, entity, Class<T>) : ResponseEntity<T>
+}
+class ParameterBuilder {
+  + {static} build(dto) : ParameterBuilder
+  + getRequestEntity() : HttpEntity
+}
+class RestClientErrorHandler {
+  + hasError(resp) : boolean
+  + handleError(resp) : void
+}
+
+' ===== 路径二：SDK 手动反序列化 =====
+class LiquidEkycServiceImpl {
+  - EkycSdkClient ekycClient
+  - getPhotos(id) : EkycGetPhotosResponseDto
+  - getVerificationResult(id) : EkycVerificationResultResponseDto
+}
+class EkycClientConfig {
+  + ekycSdkClient() : EkycSdkClient
+}
+class EkycSdkClient {
+  - RestTemplate restTemplate
+  - ObjectMapper objectMapper
+  + execute(url, m, body, Class<T>) : T
+}
+class EkycRemoteApiException {
+  + int httpStatus
+  + EkycApiErrorCode errorCode
+}
+class ErrorResult
+
+Controller --> SignUpService
+Controller --> LiquidEkycService
+SignUpService <|.. SignUpLogicImpl
+LiquidEkycService <|.. LiquidEkycServiceImpl
+
+SignUpLogicImpl --> RestClientConfig : 注入
+RestClientConfig ..> RestTemplate : 生产 @Primary
+RestClientConfig --> RestClientErrorHandler : setErrorHandler
+SignUpLogicImpl ..> ParameterBuilder : 装配请求
+SignUpLogicImpl --> RestTemplate : exchange() 取 getBody()
+
+EkycClientConfig ..> EkycSdkClient : 生产 @Bean
+LiquidEkycServiceImpl --> EkycSdkClient : execute()
+EkycSdkClient ..> RestTemplate : 内部私有实例
+EkycSdkClient ..> ErrorResult : 解析错误体
+EkycSdkClient ..> EkycRemoteApiException : 抛出
+
+legend right
+  实线 = 依赖 / 注入调用
+  虚线 = 生产 / 使用
+  空心三角 = 实现接口
+endlegend
+
+@enduml
