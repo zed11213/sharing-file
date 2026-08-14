@@ -28,7 +28,6 @@ import jp.co.jsbank.mobile.bff.common.RequestHeaderContext;
 import jp.co.jsbank.mobile.bff.common.builder.ParameterBuilder;
 import jp.co.jsbank.mobile.bff.common.code.ApplyStatusCode;
 import jp.co.jsbank.mobile.bff.common.code.PersonalityFlagCode;
-import jp.co.jsbank.mobile.bff.common.exception.EkycBusinessException;
 import jp.co.jsbank.mobile.bff.common.exception.InternalServerErrorException;
 import jp.co.jsbank.mobile.bff.common.icos.IcosHandler;
 import jp.co.jsbank.mobile.bff.common.util.NameParser.ParsedName;
@@ -48,7 +47,6 @@ import jp.co.jsbank.mobile.bff.logic.AccountOpeningLogic;
 import jp.co.jsbank.mobile.bff.logic.CashCardIssueLogic;
 import jp.co.jsbank.mobile.bff.service.LiquidEkycService;
 import jp.co.jsbank.mobile.bff.common.Constant;
-import jp.co.jsbank.mobile.bff.common.MessageIdConstant;
 import jp.co.jsbank.mobile.bff.common.EkycIdDocumentTypeCode;
 import jp.co.jsbank.mobile.bff.common.code.DocumentTypeCode;
 import jp.co.jsbank.mobile.bff.common.util.GenerateVerificationResultUtils;
@@ -185,7 +183,7 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
 
             body.setApplicantId(requestDTO.getApplicantId());
             return body;
-        } catch (EkycBusinessException e) {
+        } catch (InternalServerErrorException e) {
             // MBAP採番済のeKYC業務エラーはそのまま送出（GlobalExceptionHandlerで処理）
             throw e;
         } catch (RestClientResponseException e) {
@@ -234,8 +232,8 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             logger.info("ekyc requestInformation after, response={}",
                     response != null ? JSONObject.toJSONString(response) : "null");
 
-        } catch (EkycBusinessException e) {
-            logger.error("ekyc requestInformation EkycBusinessException mbapId={} message={}", e.getCode(),
+        } catch (InternalServerErrorException e) {
+            logger.error("ekyc requestInformation InternalServerErrorException mbapId={} message={}", e.getCode(),
                     e.getMessage());
             throw e;
         } catch (Exception e) {
@@ -276,7 +274,7 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
                 }
             }
 
-        } catch (EkycBusinessException e) {
+        } catch (InternalServerErrorException e) {
             throw e;
         }
         return response;
@@ -307,7 +305,7 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             logger.info(applicantId + " " + "自動判定結果取得API end");
             logger.info("ekyc verification result={}", JSONObject.toJSONString(response));
 
-        } catch (EkycBusinessException e) {
+        } catch (InternalServerErrorException e) {
             throw e;
         }
         return response;
@@ -338,8 +336,8 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
 
             logger.info(applicantId + " " + "ICカード読取取得API end");
 
-        } catch (EkycBusinessException e) {
-            logger.info("ekyc getIdDocumentInformation EkycBusinessException:" + e.getMessage());
+        } catch (InternalServerErrorException e) {
+            logger.info("ekyc getIdDocumentInformation InternalServerErrorException:" + e.getMessage());
             throw e;
         }
         return response;
@@ -375,8 +373,8 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             ekycClient.execute(url, HttpMethod.POST, requestDto, Void.class);
             logger.info(applicantId + " " + "本人確認結果登録API end");
 
-        } catch (EkycBusinessException e) {
-            logger.info("ekyc kyc result EkycBusinessException:" + e.getMessage());
+        } catch (InternalServerErrorException e) {
+            logger.info("ekyc kyc result InternalServerErrorException:" + e.getMessage());
             throw e;
         } catch (Exception e) {
             logger.info("ekyc kyc result Exception:" + e.getMessage());
@@ -405,9 +403,9 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         try {
             requestResult = requestInformation(myRequest);
             logger.info("setFinishVerificationWithJpki requestInformation result={}", requestResult);
-        } catch (EkycBusinessException e) {
+        } catch (InternalServerErrorException e) {
             logger.error(
-                    "setFinishVerificationWithJpki requestInformation EkycBusinessException mbapId={} message={}",
+                    "setFinishVerificationWithJpki requestInformation InternalServerErrorException mbapId={} message={}",
                     e.getCode(), e.getMessage());
             throw e;
         } catch (Exception e) {
@@ -427,8 +425,8 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             logger.info("setFinishVerificationWithJpki requestAllData done, verificationResult={}",
                     verificationJoinedData != null && verificationJoinedData.getVerificationResult() != null ? "exists"
                             : "null");
-        } catch (EkycBusinessException e) {
-            logger.error("setFinishVerificationWithJpki requestAllData EkycBusinessException mbapId={} message={}",
+        } catch (InternalServerErrorException e) {
+            logger.error("setFinishVerificationWithJpki requestAllData InternalServerErrorException mbapId={} message={}",
                     e.getCode(), e.getMessage());
             throw e;
         } catch (Exception e) {
@@ -522,9 +520,9 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         try {
             requestResult = requestInformation(myRequest);
             logger.info("setFinishVerificationWithJpki requestInformation result={}", requestResult);
-        } catch (EkycBusinessException e) {
+        } catch (InternalServerErrorException e) {
             logger.error(
-                    "setFinishVerificationWithJpki requestInformation EkycBusinessException mbapId={} message={}",
+                    "setFinishVerificationWithJpki requestInformation InternalServerErrorException mbapId={} message={}",
                     e.getCode(), e.getMessage());
             throw e;
         } catch (Exception e) {
@@ -544,8 +542,8 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             logger.info("setFinishVerificationWithJpki requestAllData done, verificationResult={}",
                     verificationJoinedData != null && verificationJoinedData.getVerificationResult() != null ? "exists"
                             : "null");
-        } catch (EkycBusinessException e) {
-            logger.error("setFinishVerificationWithJpki requestAllData EkycBusinessException mbapId={} message={}",
+        } catch (InternalServerErrorException e) {
+            logger.error("setFinishVerificationWithJpki requestAllData InternalServerErrorException mbapId={} message={}",
                     e.getCode(), e.getMessage());
             throw e;
         } catch (Exception e) {
@@ -662,14 +660,15 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         }
         requestDto.setApplicantId(applicantId);
 
-        // パラメータチェック：姓または名が空の場合はリトライ不可（MBAP1301）。
-        // 通常はフロント側でチェック済みのため、ユーザーがこのエラーを見ることは想定しない。
-        if (StringUtils.isBlank(lastName) || StringUtils.isBlank(firstName)) {
-            logger.error("ekyc パラメータチェックエラー：姓または名が空 applicantId={} lastNameBlank={} firstNameBlank={}",
-                    applicantId, StringUtils.isBlank(lastName), StringUtils.isBlank(firstName));
-            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1301, "姓または名が空");
+        // 姓・名の必須チェックは Controller の入口で実施済み（MBAP1301）。ここではログのみ。
+        if (StringUtils.isBlank(lastName)) {
+            logger.info("ekyc lastName is null");
         }
         requestDto.setLastName(lastName);
+
+        if (StringUtils.isBlank(firstName)) {
+            logger.info("ekyc firstName is null");
+        }
         requestDto.setFirstName(firstName);
 
         requestDto.setMiddleName(middleName);
@@ -752,8 +751,8 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
                     if (result != null && result.getOptionalVerificationResult() == null) {
                         logger.info("ekyc retry result is still null");
                         // 自動判定結果取得API：リトライ回数Maxでもnull → 一律MBAP1300
-                        throw new EkycBusinessException(MessageIdConstant.MESSAGE_ID_MBAP1300,
-                                HttpStatus.INTERNAL_SERVER_ERROR.value(), null, "自動判定結果取得に失敗しました（リトライ上限）");
+                        throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
+                                "自動判定結果取得に失敗しました（リトライ上限）");
                     }
                     return result;
                 });
@@ -776,27 +775,27 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             // 各非同期処理の元例外がeKYC業務エラー（MBAP採番済）なら、そのまま送出してMBAPを維持する
             if (photosFuture.isCompletedExceptionally()) {
                 Throwable ex = getOriginalException(photosFuture);
-                if (ex instanceof EkycBusinessException) {
-                    throw (EkycBusinessException) ex;
+                if (ex instanceof InternalServerErrorException) {
+                    throw (InternalServerErrorException) ex;
                 }
             }
             if (verificationResultFuture.isCompletedExceptionally()) {
                 Throwable ex = getOriginalException(verificationResultFuture);
-                if (ex instanceof EkycBusinessException) {
-                    throw (EkycBusinessException) ex;
+                if (ex instanceof InternalServerErrorException) {
+                    throw (InternalServerErrorException) ex;
                 }
             }
             if (idDocumentInformationFuture.isCompletedExceptionally()) {
                 Throwable ex = getOriginalException(idDocumentInformationFuture);
-                if (ex instanceof EkycBusinessException) {
-                    throw (EkycBusinessException) ex;
+                if (ex instanceof InternalServerErrorException) {
+                    throw (InternalServerErrorException) ex;
                 }
             }
 
             // 上記以外は予期せぬエラー（共通：MBAP1300）
             logger.error("ekyc requestAllData 予期せぬエラー", e);
-            throw new EkycBusinessException(MessageIdConstant.MESSAGE_ID_MBAP1300,
-                    HttpStatus.INTERNAL_SERVER_ERROR.value(), null, "eKYC情報取得で予期せぬエラーが発生しました");
+            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
+                    "eKYC情報取得で予期せぬエラーが発生しました");
         }
 
     }
@@ -814,8 +813,8 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             Throwable cause = ex;
             while (cause != null) {
 
-                if (cause instanceof EkycBusinessException) {
-                    return (EkycBusinessException) cause;
+                if (cause instanceof InternalServerErrorException) {
+                    return (InternalServerErrorException) cause;
                 }
                 cause = cause.getCause();
             }
@@ -857,8 +856,8 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
                 } catch (Exception e) {
                     // 画像ファイルのアップロード失敗 → 一律MBAP1300
                     logger.error(applicantId + " 本人容貌画像アップロード failed", e);
-                    throw new EkycBusinessException(MessageIdConstant.MESSAGE_ID_MBAP1300,
-                            HttpStatus.INTERNAL_SERVER_ERROR.value(), null, "Failed to store iCOS");
+                    throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
+                            "Failed to store iCOS");
                 }
                 logger.info(applicantId + " " + "本人容貌画像アップロード end");
             }
