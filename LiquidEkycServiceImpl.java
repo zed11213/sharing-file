@@ -28,13 +28,17 @@ import jp.co.jsbank.mobile.bff.common.RequestHeaderContext;
 import jp.co.jsbank.mobile.bff.common.builder.ParameterBuilder;
 import jp.co.jsbank.mobile.bff.common.code.ApplyStatusCode;
 import jp.co.jsbank.mobile.bff.common.code.PersonalityFlagCode;
+import jp.co.jsbank.mobile.bff.common.exception.EkycRemoteApiException;
 import jp.co.jsbank.mobile.bff.common.exception.InternalServerErrorException;
 import jp.co.jsbank.mobile.bff.common.icos.IcosHandler;
 import jp.co.jsbank.mobile.bff.common.util.NameParser.ParsedName;
 import jp.co.jsbank.mobile.bff.config.EkycSdkClient;
+import jp.co.jsbank.mobile.bff.config.RestEkycClientConfig;
 import jp.co.jsbank.mobile.bff.dto.liquidekyc.EkycGetPhotosResponseDto;
+import jp.co.jsbank.mobile.bff.dto.liquidekyc.EkycGetTokenRequestDto;
 import jp.co.jsbank.mobile.bff.dto.liquidekyc.EkycIdDocumentInformationResponseDto;
 import jp.co.jsbank.mobile.bff.dto.liquidekyc.EkycKycResultRequestDto;
+import jp.co.jsbank.mobile.bff.dto.liquidekyc.EkycKycResultResponseDto;
 import jp.co.jsbank.mobile.bff.dto.liquidekyc.EkycPhotosInformationDto;
 import jp.co.jsbank.mobile.bff.dto.liquidekyc.EkycRequestInformationRequestDto;
 import jp.co.jsbank.mobile.bff.dto.liquidekyc.EkycRequestInformationResponseDto;
@@ -47,6 +51,7 @@ import jp.co.jsbank.mobile.bff.logic.AccountOpeningLogic;
 import jp.co.jsbank.mobile.bff.logic.CashCardIssueLogic;
 import jp.co.jsbank.mobile.bff.service.LiquidEkycService;
 import jp.co.jsbank.mobile.bff.common.Constant;
+import jp.co.jsbank.mobile.bff.common.EkycApiErrorCode;
 import jp.co.jsbank.mobile.bff.common.EkycIdDocumentTypeCode;
 import jp.co.jsbank.mobile.bff.common.code.DocumentTypeCode;
 import jp.co.jsbank.mobile.bff.common.util.GenerateVerificationResultUtils;
@@ -77,6 +82,12 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
 
     final String HEADER_API_KEY = "X-Ekyc-Api-Key";
     final String APPLICANT_ID = "applicant_id";
+
+    /**
+     * RestTemplate
+     */
+    @Autowired
+    RestEkycClientConfig restClientConfig;
 
     @Autowired
     @Qualifier("ekycSdkClient")
@@ -171,21 +182,33 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
 
         try {
             logger.info("ekyc before");
-            String url = liquidConnectorUrl + GET_TOKEN;
+            RestTemplate restTemplate = restClientConfig.ekycRestTemplate2();
             if (requestDTO.getApplicantId() == null || requestDTO.getApplicantId().isEmpty()) {
                 requestDTO.setApplicantId(createApplicantId());
             }
-            logger.info(url + "::REQ-> " + JSONObject.toJSONString(requestDTO));
+            EkycGetTokenRequestDto ekycRequestDto = new EkycGetTokenRequestDto();
+            // トークン取得リクエストDTOの設定
+            ekycRequestDto.setApplicantId(requestDTO.getApplicantId());
+            ekycRequestDto.setOperationAssignmentPriority(requestDTO.getOperationAssignmentPriority());
+            ekycRequestDto.setRedirectUrl(requestDTO.getRedirectUrl());
+            ekycRequestDto.setErrorRedirectUrl(requestDTO.getErrorRedirectUrl());
+            String url = liquidConnectorUrl + GET_TOKEN;
+            logger.info(url + "::REQ-> " + JSONObject.toJSONString(ekycRequestDto));
+            // ヘッダー設定
+            HttpHeaders requestHeaders = new HttpHeaders();
+            requestHeaders.add(HEADER_API_KEY, liquidApiKey);
+            requestHeaders.add("Content-Type", "application/json");
 
-            // SDK本人確認申請APIを呼び出す（ApiKey・Content-TypeはEkycSdkClientが付与）
-            GetTokenResponseDTO body = ekycClient.execute(url,
-                    HttpMethod.POST, requestDTO, GetTokenResponseDTO.class);
+            ParameterBuilder parameterDto = ParameterBuilder.buildLiquidEkyc(ekycRequestDto, requestHeaders);
+            // 契約管理操作履歴照会APIを呼び出す
 
+            ResponseEntity<GetTokenResponseDTO> response = restTemplate.exchange(url,
+                    HttpMethod.POST, parameterDto.getRequestEntity(),
+                    GetTokenResponseDTO.class);
+
+            GetTokenResponseDTO body = response.getBody();
             body.setApplicantId(requestDTO.getApplicantId());
             return body;
-        } catch (InternalServerErrorException e) {
-            // MBAP採番済のeKYC業務エラーはそのまま送出（GlobalExceptionHandlerで処理）
-            throw e;
         } catch (RestClientResponseException e) {
             logger.info("ekyc RestClientResponseException，statusCode={}, responseBody={}",
                     e.getRawStatusCode(),
@@ -219,21 +242,29 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             // HttpMethod.POST,
             // parameterDto,EkycRequestInformationResponseDto.class);
 
+            RestTemplate restTemplate = restClientConfig.ekycRestTemplate2();
             String fullUrlPath = liquidConnectorUrl + REQUEST_INFORMATIONS;
+            // String fullUrlPath = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl,
+            // EkycApiEndpoints.KYC_REQUEST_INFORMATION);
             logger.info("ekyc requestInformation url={}", fullUrlPath);
+            // ヘッダー設定
+            HttpHeaders requestHeaders = new HttpHeaders();
+            requestHeaders.add(HEADER_API_KEY, liquidApiKey);
+            requestHeaders.add("Content-Type", "application/json");
 
-            // 申請情報登録APIを呼び出す（ApiKey・Content-TypeはEkycSdkClientが付与）
-            EkycRequestInformationResponseDto response = ekycClient.execute(
+            ParameterBuilder parameterDto = ParameterBuilder.buildLiquidEkyc(requestDto, requestHeaders);
+
+            ResponseEntity<EkycRequestInformationResponseDto> response = restTemplate.exchange(
                     fullUrlPath,
-                    HttpMethod.POST, requestDto,
+                    HttpMethod.POST, parameterDto.getRequestEntity(),
                     EkycRequestInformationResponseDto.class);
 
             logger.info(applicantId + " " + "申請情報登録API end");
             logger.info("ekyc requestInformation after, response={}",
                     response != null ? JSONObject.toJSONString(response) : "null");
 
-        } catch (InternalServerErrorException e) {
-            logger.error("ekyc requestInformation InternalServerErrorException mbapId={} message={}", e.getCode(),
+        } catch (EkycRemoteApiException e) {
+            logger.error("ekyc requestInformation EkycRemoteApiException errorCode={} message={}", e.getErrorCode(),
                     e.getMessage());
             throw e;
         } catch (Exception e) {
@@ -254,7 +285,6 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         EkycGetPhotosResponseDto response = null;
         logger.info(applicantId + " " + "画像データ取得API start");
         try {
-            /* TODO applicant id null check */
 
             String fullUrlPath = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl, EkycApiEndpoints.GET_PHOTOS,
                     applicantId);
@@ -274,7 +304,7 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
                 }
             }
 
-        } catch (InternalServerErrorException e) {
+        } catch (EkycRemoteApiException e) {
             throw e;
         }
         return response;
@@ -305,7 +335,7 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             logger.info(applicantId + " " + "自動判定結果取得API end");
             logger.info("ekyc verification result={}", JSONObject.toJSONString(response));
 
-        } catch (InternalServerErrorException e) {
+        } catch (EkycRemoteApiException e) {
             throw e;
         }
         return response;
@@ -336,8 +366,8 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
 
             logger.info(applicantId + " " + "ICカード読取取得API end");
 
-        } catch (InternalServerErrorException e) {
-            logger.info("ekyc getIdDocumentInformation InternalServerErrorException:" + e.getMessage());
+        } catch (EkycRemoteApiException e) {
+            logger.info("EkycRemoteApiException");
             throw e;
         }
         return response;
@@ -352,33 +382,50 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
      */
     private String getKycResult(EkycKycResultRequestDto requestDto) {
         String applicantId = requestDto.getApplicantId();
-        logger.info(applicantId + " " + "本人確認結果登録API start");
+        
+          try {
+            logger.info(applicantId + " " + "本人確認結果登録API start old");
+            HttpHeaders requestHeaders = new HttpHeaders();
+            requestHeaders.add(HEADER_API_KEY, liquidApiKey);
+            requestHeaders.add("Content-Type", "application/json");
 
-        try {
-            /* TODO Check parameter */
-            // HttpHeaders requestHeaders = new HttpHeaders();
-            // requestHeaders.add(HEADER_API_KEY, liquidApiKey);
-            // requestHeaders.add("Content-Type", "application/json");
-
-            // ParameterBuilder parameterDto = ParameterBuilder.buildLiquidEkyc(requestDto,
-            // requestHeaders);
-            // String fullUrlPath = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl,
-            // EkycApiEndpoints.KYC_RESULT);
-            // EkycKycResultResponseDto response =
-            // ekycClient.execute(fullUrlPath,HttpMethod.POST,parameterDto,EkycKycResultResponseDto.class);
-
-            String url = liquidConnectorUrl + "/v1/kyc_results";
-
-            // 本人確認結果登録APIを呼び出す（ApiKey・Content-TypeはEkycSdkClientが付与）
-            ekycClient.execute(url, HttpMethod.POST, requestDto, Void.class);
-            logger.info(applicantId + " " + "本人確認結果登録API end");
-
-        } catch (InternalServerErrorException e) {
-            logger.info("ekyc kyc result InternalServerErrorException:" + e.getMessage());
-            throw e;
+            ParameterBuilder parameterDto = ParameterBuilder.buildLiquidEkyc(requestDto,
+                    requestHeaders);
+            String fullUrlPath = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl,
+                    EkycApiEndpoints.KYC_RESULT);
+            logger.info("ekycClient.execute start");
+            EkycKycResultResponseDto response = ekycClient.execute(fullUrlPath, HttpMethod.POST, parameterDto,
+                    EkycKycResultResponseDto.class);
+            logger.info(applicantId + " " + "本人確認結果登録API end old");
         } catch (Exception e) {
-            logger.info("ekyc kyc result Exception:" + e.getMessage());
+            logger.info("old ekycClient.execute response error:" + e.getMessage());
+            logger.info(applicantId + " " + "本人確認結果登録API start");
+            try {
+                /* TODO Check parameter */
+
+                RestTemplate restTemplate = restClientConfig.ekycRestTemplate2();
+
+                String url = liquidConnectorUrl + "/v1/kyc_results";
+
+                // ヘッダー設定
+                HttpHeaders requestHeaders = new HttpHeaders();
+                requestHeaders.add(HEADER_API_KEY, liquidApiKey);
+                requestHeaders.add("Content-Type", "application/json");
+
+                ParameterBuilder parameterDto = ParameterBuilder.buildLiquidEkyc(requestDto, requestHeaders);
+
+                restTemplate.exchange(url,
+                        HttpMethod.POST, parameterDto.getRequestEntity(), Void.class);
+                logger.info(applicantId + " " + "本人確認結果登録API end");
+
+            } catch (EkycRemoteApiException e1) {
+                logger.info("ekyc kyc result EkycRemoteApiException:" + e1.getMessage());
+                throw e1;
+            } catch (Exception e2) {
+                logger.info("ekyc kyc result Exception:" + e2.getMessage());
+            }
         }
+
         return Constant.OK;
     }
 
@@ -403,10 +450,10 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         try {
             requestResult = requestInformation(myRequest);
             logger.info("setFinishVerificationWithJpki requestInformation result={}", requestResult);
-        } catch (InternalServerErrorException e) {
+        } catch (EkycRemoteApiException e) {
             logger.error(
-                    "setFinishVerificationWithJpki requestInformation InternalServerErrorException mbapId={} message={}",
-                    e.getCode(), e.getMessage());
+                    "setFinishVerificationWithJpki requestInformation EkycRemoteApiException errorCode={} message={}",
+                    e.getErrorCode(), e.getMessage());
             throw e;
         } catch (Exception e) {
             logger.error("setFinishVerificationWithJpki requestInformation Exception message={}", e.getMessage(), e);
@@ -425,9 +472,9 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             logger.info("setFinishVerificationWithJpki requestAllData done, verificationResult={}",
                     verificationJoinedData != null && verificationJoinedData.getVerificationResult() != null ? "exists"
                             : "null");
-        } catch (InternalServerErrorException e) {
-            logger.error("setFinishVerificationWithJpki requestAllData InternalServerErrorException mbapId={} message={}",
-                    e.getCode(), e.getMessage());
+        } catch (EkycRemoteApiException e) {
+            logger.error("setFinishVerificationWithJpki requestAllData EkycRemoteApiException errorCode={} message={}",
+                    e.getErrorCode(), e.getMessage());
             throw e;
         } catch (Exception e) {
             logger.error("setFinishVerificationWithJpki requestAllData Exception message={}", e.getMessage(), e);
@@ -497,7 +544,7 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             }
         } catch (Exception e) {
             logger.info("結果登録api error:", e);
-            throw new InternalServerErrorException(ErrorCodeConstant.EKYC_ERROR_CODE_0001, "本人確認結果登録API error");
+            throw new InternalServerErrorException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "本人確認結果登録API error");
         }
 
         return receptionNumber;
@@ -520,10 +567,10 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         try {
             requestResult = requestInformation(myRequest);
             logger.info("setFinishVerificationWithJpki requestInformation result={}", requestResult);
-        } catch (InternalServerErrorException e) {
+        } catch (EkycRemoteApiException e) {
             logger.error(
-                    "setFinishVerificationWithJpki requestInformation InternalServerErrorException mbapId={} message={}",
-                    e.getCode(), e.getMessage());
+                    "setFinishVerificationWithJpki requestInformation EkycRemoteApiException errorCode={} message={}",
+                    e.getErrorCode(), e.getMessage());
             throw e;
         } catch (Exception e) {
             logger.error("setFinishVerificationWithJpki requestInformation Exception message={}", e.getMessage(), e);
@@ -542,9 +589,9 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             logger.info("setFinishVerificationWithJpki requestAllData done, verificationResult={}",
                     verificationJoinedData != null && verificationJoinedData.getVerificationResult() != null ? "exists"
                             : "null");
-        } catch (InternalServerErrorException e) {
-            logger.error("setFinishVerificationWithJpki requestAllData InternalServerErrorException mbapId={} message={}",
-                    e.getCode(), e.getMessage());
+        } catch (EkycRemoteApiException e) {
+            logger.error("setFinishVerificationWithJpki requestAllData EkycRemoteApiException errorCode={} message={}",
+                    e.getErrorCode(), e.getMessage());
             throw e;
         } catch (Exception e) {
             logger.error("setFinishVerificationWithJpki requestAllData Exception message={}", e.getMessage(), e);
@@ -614,7 +661,7 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             }
         } catch (Exception e) {
             logger.info("結果登録api error:", e);
-            throw new InternalServerErrorException(ErrorCodeConstant.EKYC_ERROR_CODE_0001, "本人確認結果登録API error");
+            throw new InternalServerErrorException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "本人確認結果登録API error");
         }
 
         return receptionNumber;
@@ -626,7 +673,7 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
 
         if (Objects.isNull(result)) {
             logger.info("ekyc result data is null");
-            throw new InternalServerErrorException(ErrorCodeConstant.EKYC_ERROR_CODE_0001, "自動判定結果取得失敗しました");
+            throw new InternalServerErrorException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "自動判定結果取得失敗しました");
         }
 
         return Constant.OK;
@@ -660,7 +707,6 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         }
         requestDto.setApplicantId(applicantId);
 
-        // 姓・名の必須チェックは Controller の入口で実施済み（MBAP1301）。ここではログのみ。
         if (StringUtils.isBlank(lastName)) {
             logger.info("ekyc lastName is null");
         }
@@ -742,7 +788,7 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
                                     + "/" + MAX_RETRY + ")");
                         } catch (Exception e) {
                             logger.info("ekyc sleep error:" + e.getMessage());
-                            throw new InternalServerErrorException(ErrorCodeConstant.EKYC_ERROR_CODE_0001,
+                            throw new InternalServerErrorException(ErrorCodeConstant.EKYC_CODE_MBEK0001,
                                     e.getMessage());
                         }
                         result = getVerificationResult(requestDto.getApplicantId());
@@ -750,9 +796,8 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
 
                     if (result != null && result.getOptionalVerificationResult() == null) {
                         logger.info("ekyc retry result is still null");
-                        // 自動判定結果取得API：リトライ回数Maxでもnull → 一律MBAP1300
-                        throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
-                                "自動判定結果取得に失敗しました（リトライ上限）");
+                        throw new InternalServerErrorException(ErrorCodeConstant.EKYC_CODE_MBEK0001,
+                                "自動判定結果取得失敗しました");
                     }
                     return result;
                 });
@@ -761,10 +806,9 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         CompletableFuture<EkycIdDocumentInformationResponseDto> idDocumentInformationFuture = CompletableFuture
                 .supplyAsync(() -> getIdDocumentInformation(requestDto.getApplicantId()));
 
-        try {
-            // すべての非同期処理の完了を待つ（いずれか失敗時はここで例外送出）
-            CompletableFuture.allOf(photosFuture, verificationResultFuture, idDocumentInformationFuture).join();
+        CompletableFuture.allOf(photosFuture, verificationResultFuture, idDocumentInformationFuture).join();
 
+        try {
             EkycGetPhotosResponseDto photos = photosFuture.get();
             EkycVerificationResultResponseDto verificationResult = verificationResultFuture.get();
             EkycIdDocumentInformationResponseDto idDocumentsInformation = idDocumentInformationFuture.get();
@@ -772,30 +816,38 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
 
         } catch (Exception e) {
 
-            // 各非同期処理の元例外がeKYC業務エラー（MBAP採番済）なら、そのまま送出してMBAPを維持する
+            EkycApiErrorCode apiErroCode = EkycApiErrorCode.getLocaleError();
+            EkycRemoteApiException exception = new EkycRemoteApiException(HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                    apiErroCode, "リクエスト読取失敗", "Failed to read the request body data");
             if (photosFuture.isCompletedExceptionally()) {
                 Throwable ex = getOriginalException(photosFuture);
-                if (ex instanceof InternalServerErrorException) {
-                    throw (InternalServerErrorException) ex;
+                if (ex instanceof EkycRemoteApiException) {
+                    throw (EkycRemoteApiException) ex;
                 }
-            }
-            if (verificationResultFuture.isCompletedExceptionally()) {
-                Throwable ex = getOriginalException(verificationResultFuture);
-                if (ex instanceof InternalServerErrorException) {
-                    throw (InternalServerErrorException) ex;
-                }
-            }
-            if (idDocumentInformationFuture.isCompletedExceptionally()) {
-                Throwable ex = getOriginalException(idDocumentInformationFuture);
-                if (ex instanceof InternalServerErrorException) {
-                    throw (InternalServerErrorException) ex;
-                }
+
+                throw exception;
+
             }
 
-            // 上記以外は予期せぬエラー（共通：MBAP1300）
-            logger.error("ekyc requestAllData 予期せぬエラー", e);
-            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
-                    "eKYC情報取得で予期せぬエラーが発生しました");
+            if (verificationResultFuture.isCompletedExceptionally()) {
+                Throwable ex = getOriginalException(verificationResultFuture);
+                if (ex instanceof EkycRemoteApiException) {
+                    throw (EkycRemoteApiException) ex;
+                }
+                throw exception;
+            }
+
+            if (idDocumentInformationFuture.isCompletedExceptionally()) {
+                Throwable ex = getOriginalException(idDocumentInformationFuture);
+                if (ex instanceof EkycRemoteApiException) {
+                    throw (EkycRemoteApiException) ex;
+                }
+                throw exception;
+
+            }
+
+            throw exception;
+
         }
 
     }
@@ -813,8 +865,8 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             Throwable cause = ex;
             while (cause != null) {
 
-                if (cause instanceof InternalServerErrorException) {
-                    return (InternalServerErrorException) cause;
+                if (cause instanceof EkycRemoteApiException) {
+                    return (EkycRemoteApiException) cause;
                 }
                 cause = cause.getCause();
             }
@@ -854,9 +906,10 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
                     list.add(faceDoc);
                     index++;
                 } catch (Exception e) {
-                    // 画像ファイルのアップロード失敗 → 一律MBAP1300
-                    logger.error(applicantId + " 本人容貌画像アップロード failed", e);
-                    throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
+                    EkycApiErrorCode apiErroCode = EkycApiErrorCode.getLocaleError();
+                    logger.error(applicantId + " 本人容貌画像アップロード failed, apiErroCode={}",
+                            apiErroCode.getDescription(), e);
+                    throw new EkycRemoteApiException(HttpStatus.INTERNAL_SERVER_ERROR.value(), apiErroCode, "",
                             "Failed to store iCOS");
                 }
                 logger.info(applicantId + " " + "本人容貌画像アップロード end");
@@ -883,19 +936,11 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             }
         }
 
-        // ③-1 結果画像作成：データ不備等で失敗した場合はリトライ不可として MBAP1300 を返す
-        String base64;
+        // ③ 生成した本人確認結果画像：失敗時は中断
         try {
             logger.info(applicantId + " " + "結果画像作成 start");
-            base64 = GenerateVerificationResultUtils.createBase64WithVerification(data, apiInterface);
+            String base64 = GenerateVerificationResultUtils.createBase64WithVerification(data, apiInterface);
             logger.info(applicantId + " " + "結果画像作成 end");
-        } catch (Exception e) {
-            logger.error(applicantId + " 結果画像作成 failed:" + e.getMessage(), e);
-            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300, "結果画像作成失敗");
-        }
-
-        // ③-2 結果画像アップロード：既存の処理を踏襲し、失敗時は中断
-        try {
             if (!StringUtils.isBlank(base64)) {
                 IdentityVerificationDocumentsDto resultDoc = uploadImageToICOS(applicantId, null, base64,
                         VERFICATION_RESULT_TYPE, index);
@@ -907,7 +952,7 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         } catch (Exception e) {
             logger.info(applicantId + " 結果画像アップロード failed:" + e.getMessage());
             logger.info(applicantId + " 結果画像アップロード failed:", e);
-            throw new InternalServerErrorException(ErrorCodeConstant.EKYC_ERROR_CODE_0001, "ICOSへの書き込み失敗");
+            throw new InternalServerErrorException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "ICOSへの書き込み失敗");
         }
 
         return list;
@@ -936,17 +981,13 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
 
     /**
      * アップロードファイル名を生成する。
-     * 元ファイル名がある場合は既存の replaceFileName ロジックを流用し、
-     * 無い場合（結果画像など）は「タイムスタンプ-index-端末ID.jpeg」で組み立てる。
+     * タイムスタンプ-index-端末ID.jpeg」で組み立てる。
      */
     private String buildIcosFileName(String originalFileName, int index) {
-        if (StringUtils.isBlank(originalFileName)) {
-            String deviceId = "sm"
-                    + RequestHeaderContext.getInstance().getDeviceId().toLowerCase().replaceAll("-", "");
-            String timeStamp = String.valueOf(System.currentTimeMillis());
-            return timeStamp + "-" + index + "-" + deviceId + ".jpeg";
-        }
-        return replaceFileName(originalFileName, index);
+        String deviceId = "sm"
+            + RequestHeaderContext.getInstance().getDeviceId().toLowerCase().replaceAll("-", "");
+        String timeStamp = String.valueOf(System.currentTimeMillis());
+        return timeStamp + "-" + index + "-" + deviceId + ".jpeg";
     }
 
     private String storeRequestInformationToABA(EkycFinishVerificationRequestDto finishVerification,
@@ -1074,34 +1115,5 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
 
         }
         return receptionNumber;
-    }
-
-    /**
-     * ファイル名前編集
-     */
-    private String replaceFileName(String originalFileName, int index) {
-
-        if (StringUtils.isBlank(originalFileName)) {
-            return originalFileName;
-        }
-
-        // タイムスタンプ
-        String timeStamp = String.valueOf(System.currentTimeMillis());
-
-        String fileName = originalFileName;
-
-        if (originalFileName.lastIndexOf("sm") == -1) {
-            // 端末ID
-            String deviceId = "sm"
-                    + RequestHeaderContext.getInstance().getDeviceId().toLowerCase().replaceAll("-", "");
-            String replacement = "-" + index + "-" + deviceId + ".jpeg";
-            fileName = originalFileName.replace(".jpeg", replacement);
-        }
-
-        // タイムスタンプを入れ替わる
-        fileName = fileName.replaceFirst("^(\\d+-)(\\d+(?:\\.\\d+)?)(-\\d+-)", "$1" + timeStamp + "$3");
-
-        return fileName;
-
     }
 }
