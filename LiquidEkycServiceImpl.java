@@ -15,8 +15,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpMethod;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestClientResponseException;
 
 import com.alibaba.fastjson.JSONObject;
 
@@ -92,11 +90,6 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
      */
     @Value("${liquid_ekyc_connector_api_key}")
     private String liquidApiKey;
-
-    // トークン取得
-    private final String GET_TOKEN = "/v1/sdk/applications";
-    // 申請情報登録
-    private final String REQUEST_INFORMATIONS = "/v1/kyc_request_informations";
 
     private final String EXPIRED = "/v1/applicant_expired_requests?applicant_expired_date=20250101";
     private Logger logger = LoggerFactory.getLogger(LiquidEkycServiceImpl.class);
@@ -180,24 +173,20 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             ekycRequestDto.setOperationAssignmentPriority(requestDTO.getOperationAssignmentPriority());
             ekycRequestDto.setRedirectUrl(requestDTO.getRedirectUrl());
             ekycRequestDto.setErrorRedirectUrl(requestDTO.getErrorRedirectUrl());
-            String url = liquidConnectorUrl + GET_TOKEN;
-            logger.info(url + "::REQ-> " + JSONObject.toJSONString(ekycRequestDto));
+            String fullUrlPath = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl, EkycApiEndpoints.GET_TOKEN);
+            logger.info(fullUrlPath + "::REQ-> " + JSONObject.toJSONString(ekycRequestDto));
 
             // トークン取得APIを呼び出す（ApiKey・Content-TypeはEkycSdkClientが付与）
-            GetTokenResponseDTO body = ekycClient.execute(url,
-                    HttpMethod.POST, ekycRequestDto, GetTokenResponseDTO.class);
+            GetTokenResponseDTO body = ekycClient.execute(
+                    fullUrlPath,
+                    HttpMethod.POST, ekycRequestDto,
+                    GetTokenResponseDTO.class);
 
             body.setApplicantId(requestDTO.getApplicantId());
             return body;
-        } catch (RestClientResponseException e) {
-            logger.info("ekyc RestClientResponseException，statusCode={}, responseBody={}",
-                    e.getRawStatusCode(),
-                    e.getResponseBodyAsString(),
-                    e);
-            throw e;
-
-        } catch (RestClientException e) {
-            logger.info("ekyc RestClientException:", e);
+        } catch (EkycRemoteApiException e) {
+            logger.error("ekyc getToken EkycRemoteApiException errorCode={} message={}", e.getErrorCode(),
+                    e.getMessage());
             throw e;
         } catch (Exception e) {
             logger.info("ekyc exception:", e.getMessage());
@@ -210,21 +199,8 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         String applicantId = requestDto.getApplicantId();
         logger.info(applicantId + " " + "申請情報登録API start");
         try {
-            // ParameterBuilder parameterDto = ParameterBuilder.buildLiquidEkyc(requestDto,
-            // null);
-
-            // String fullUrlPath =
-            // EkycApiEndpoints.buildFullUrl(EkycApiEndpoints.KYC_REQUEST_INFORMATION);
-            // String fullUrlPath = liquidConnectorUrl + REQUEST_INFORMATIONS;
-            // logger.info("ekyc requestInformation url={}", fullUrlPath);
-
-            // EkycRequestInformationResponseDto response = ekycClient.execute(fullUrlPath,
-            // HttpMethod.POST,
-            // parameterDto,EkycRequestInformationResponseDto.class);
-
-            String fullUrlPath = liquidConnectorUrl + REQUEST_INFORMATIONS;
-            // String fullUrlPath = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl,
-            // EkycApiEndpoints.KYC_REQUEST_INFORMATION);
+            String fullUrlPath = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl,
+                    EkycApiEndpoints.KYC_REQUEST_INFORMATION);
             logger.info("ekyc requestInformation url={}", fullUrlPath);
 
             // 申請情報登録APIを呼び出す（ApiKey・Content-TypeはEkycSdkClientが付与）
@@ -359,19 +335,26 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
         logger.info(applicantId + " " + "本人確認結果登録API start");
 
         try {
-            /* TODO Check parameter */
-            String fullUrlPath = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl,
-                    EkycApiEndpoints.KYC_RESULT);
+            String fullUrlPath = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl, EkycApiEndpoints.KYC_RESULT);
+            logger.info("ekyc kycResult url={}", fullUrlPath);
 
             // 本人確認結果登録APIを呼び出す（ApiKey・Content-TypeはEkycSdkClientが付与）
-            ekycClient.execute(fullUrlPath, HttpMethod.POST, requestDto, EkycKycResultResponseDto.class);
+            EkycKycResultResponseDto response = ekycClient.execute(
+                    fullUrlPath,
+                    HttpMethod.POST, requestDto,
+                    EkycKycResultResponseDto.class);
+
             logger.info(applicantId + " " + "本人確認結果登録API end");
+            logger.info("ekyc kycResult after, response={}",
+                    response != null ? JSONObject.toJSONString(response) : "null");
 
         } catch (EkycRemoteApiException e) {
-            logger.info("ekyc kyc result EkycRemoteApiException:" + e.getMessage());
+            logger.error("ekyc kycResult EkycRemoteApiException errorCode={} message={}", e.getErrorCode(),
+                    e.getMessage());
             throw e;
         } catch (Exception e) {
-            logger.info("ekyc kyc result Exception:" + e.getMessage());
+            // 本人確認結果登録の失敗は完了処理を巻き戻さない（従来通り握りつぶす）
+            logger.error("ekyc kycResult Exception message={}", e.getMessage(), e);
         }
 
         return Constant.OK;
