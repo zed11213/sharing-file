@@ -191,8 +191,13 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             ekycRequestDto.setErrorRedirectUrl(requestDTO.getErrorRedirectUrl());
             String url = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl, EkycApiEndpoints.GET_TOKEN);
             logger.info(url + "::REQ-> " + JSONObject.toJSONString(ekycRequestDto));
-            // APIキーとContent-TypeはEkycSdkClientの共通ヘッダーで設定される
-            GetTokenResponseDTO body = ekycClient.executeGetToken(url, HttpMethod.POST, ekycRequestDto, null);
+            // ヘッダー設定
+            HttpHeaders requestHeaders = new HttpHeaders();
+            requestHeaders.add(HEADER_API_KEY, liquidApiKey);
+            requestHeaders.add("Content-Type", "application/json");
+
+            GetTokenResponseDTO body = ekycClient.executeGetToken(url, HttpMethod.POST, ekycRequestDto,
+                    requestHeaders);
 
             body.setApplicantId(requestDTO.getApplicantId());
             logger.info("SDK本人確認申請API end old");
@@ -262,10 +267,14 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
             String fullUrlPath = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl,
                     EkycApiEndpoints.KYC_REQUEST_INFORMATION);
             logger.info("ekyc requestInformation url={}", fullUrlPath);
-            // APIキーとContent-TypeはEkycSdkClientの共通ヘッダーで設定される
+            // ヘッダー設定
+            HttpHeaders requestHeaders = new HttpHeaders();
+            requestHeaders.add(HEADER_API_KEY, liquidApiKey);
+            requestHeaders.add("Content-Type", "application/json");
+
             EkycRequestInformationResponseDto response = ekycClient.executeRequestInformation(
                     fullUrlPath,
-                    HttpMethod.POST, requestDto, null);
+                    HttpMethod.POST, requestDto, requestHeaders);
 
             logger.info(applicantId + " " + "申請情報登録API end");
             logger.info("ekyc requestInformation after, response={}",
