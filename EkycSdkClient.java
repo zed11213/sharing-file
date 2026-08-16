@@ -10,6 +10,7 @@ import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -24,9 +25,13 @@ import javax.net.ssl.SSLContext;
 import org.apache.http.conn.ssl.TrustStrategy;
 import org.apache.http.ssl.SSLContexts;
 
-import jp.co.jsbank.mobile.bff.common.exception.InternalServerErrorException;
+import jp.co.jsbank.mobile.bff.common.exception.BadRequestException;
+import jp.co.jsbank.mobile.bff.common.exception.EkycRemoteApiException;
 import jp.co.jsbank.mobile.bff.common.ErrorResult;
+import jp.co.jsbank.mobile.bff.common.EkycApiErrorCode;
 import jp.co.jsbank.mobile.bff.common.ErrorCodeConstant;
+import jp.co.jsbank.mobile.bff.dto.liquidekyc.EkycRequestInformationResponseDto;
+import jp.co.jsbank.mobile.bff.dto.liquidekyc.GetTokenResponseDTO;
 
 import java.util.Collections;
 
@@ -37,7 +42,7 @@ public class EkycSdkClient {
     private final ObjectMapper objectMapper;
     
     /**
-     * * @param apiKeyName  
+     * @param apiKeyName  
      * @param apiKeyValue 
      */
     public EkycSdkClient(String apiKeyName, String apiKeyValue)  {
@@ -66,25 +71,14 @@ public class EkycSdkClient {
     }
 
     /**
-     * eKYCコネクタAPIを呼び出し、レスポンスを指定型へ変換して返す。
-     *
-     * <p>2系統に分かれていたeKYC通信をこのメソッドへ統合する。エラー時は一律で
-     * {@link InternalServerErrorException}（MBAP1300）を送出し、既存の
-     * {@code GlobalExceptionHandler} が処理する。</p>
-     *
-     * @param url          エンドポイントURL
-     * @param method       HTTPメソッド
-     * @param requestBody  リクエストボディ（不要な場合はnull）
-     * @param responseType レスポンス型（ボディ不要な場合は {@code Void.class}）
-     * @param <T>          レスポンス型
-     * @return 変換済みレスポンス（ボディが無い場合はnull）
+     * EKYC  リスポンス処理
      */
     public <T> T execute(String url, HttpMethod method, Object requestBody, Class<T> responseType) {
         try {
             HttpEntity<Object> entity = new HttpEntity<>(requestBody);
 
             logRequestBody(entity);
-
+            
             ResponseEntity<String> response = this.restTemplate.exchange(url, method, entity, String.class);
             HttpStatus status = (HttpStatus) response.getStatusCode();
 
@@ -98,48 +92,208 @@ public class EkycSdkClient {
                     return this.objectMapper.readValue(body, responseType);
                 } catch (Exception e) {
                     log.error("ekyc リスポンス処理失敗, URL: {}", url, e);
-                    throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
-                            "eKYCレスポンス処理に失敗しました: " + url);
+                    EkycApiErrorCode  apiErroCode = EkycApiErrorCode.getLocaleError();
+                    throw new BadRequestException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "予期せぬエラー発生しました。");
                 }
             }
-            // 2xx以外の想定外ステータス
-            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
-                    "eKYC予想外のステータス: " + status.value());
+            throw new BadRequestException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "予期せぬエラー発生しました。");
 
-        } catch (InternalServerErrorException ex) {
-            // 送出済みのMBAP1300例外はそのまま送出
-            throw ex;
         } catch (HttpStatusCodeException ex) {
-            // 失敗処理 (4xx/5xx)：レスポンスボディからeKYCエラーコード（CExxxxx）をログ用に取得
-            int httpStatusCode = ex.getStatusCode().value();
+            // 失败处理 (4xx/5xx) error_code
+            int statusCode = ex.getStatusCode().value();
             String errorBody = ex.getResponseBodyAsString();
+            
+            String errorCode = String.valueOf(statusCode);
+            String errorMessage = "システムエラー発生しました";
 
-            String rawCode = null;
             try {
                 if (errorBody != null && !errorBody.trim().isEmpty()) {
                     ErrorResult errorDto = this.objectMapper.readValue(errorBody, ErrorResult.class);
                     if (errorDto != null) {
-                        rawCode = errorDto.getErrorCode();
+                        errorCode = errorDto.getErrorCode();
+                        errorMessage = errorDto.getErrorMessage();
                     }
                 }
             } catch (Exception parseEx) {
-                log.warn("eKYCレスポンスエラー詳細情報の解析に失敗しました: {}", ex.getMessage());
+                errorMessage = "Ekyc :リスポンスエラー詳細情報処理失敗 " + ex.getMessage();
             }
-
-            // eKYC通信エラーは一律 MBAP1300 で送出
-            log.error("ekyc APIエラー URL: {}, httpStatus: {}, rawCode: {}", url, httpStatusCode, rawCode);
-            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
-                    "eKYC APIエラー rawCode=" + rawCode);
-
-        } catch (Exception e) {
-            // 通信タイムアウト・ネットワーク異常等
-            log.error("ekyc NETWORK異常発生しました, URL: {}", url, e);
-            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
-                    "eKYC通信で異常が発生しました: " + url);
+            
+            EkycApiErrorCode  apiErroCode = EkycApiErrorCode.fromRawCode(errorCode);
+            throw new EkycRemoteApiException(statusCode, apiErroCode, errorCode, errorMessage);
+        }catch (Exception e) {
+                log.error("NETWORK異常発生しました, URL: {}", url, e);
+                EkycApiErrorCode  apiErroCode = EkycApiErrorCode.getSystemError();
+                throw new EkycRemoteApiException(HttpStatus.INTERNAL_SERVER_ERROR.value(), apiErroCode, "SDK_NETWORK_TIMEOUT", "NETWORK異常発生しました");
         }
     }
 
-    private void logRequestBody(HttpEntity<Object> entity) {
+    /**
+     * EKYC  リスポンス処理
+     */
+    public void executePost(String url, HttpMethod method, Object requestBody, HttpHeaders requestHeaders) {
+        try {
+            HttpEntity<Object> entity = new HttpEntity<Object>(requestBody, requestHeaders);
+
+            logRequestBody(entity);
+            
+            this.restTemplate.exchange(url, method, entity, Void.class);
+            //HttpStatus status = (HttpStatus) response.getStatusCode();
+
+            // 成功処理 (2xx)
+            // if (status.is2xxSuccessful()) {
+            //     String body = response.getBody();
+            //     if (responseType == Void.class || body == null || body.trim().isEmpty()) {
+            //         return null;
+            //     }
+            //     try {
+            //         return this.objectMapper.readValue(body, responseType);
+            //     } catch (Exception e) {
+            //         log.error("ekyc リスポンス処理失敗, URL: {}", url, e);
+            //         EkycApiErrorCode  apiErroCode = EkycApiErrorCode.getLocaleError();
+            //         throw new BadRequestException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "予期せぬエラー発生しました。");
+            //     }
+            // }
+            // throw new BadRequestException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "予期せぬエラー発生しました。");
+
+        } catch (HttpStatusCodeException ex) {
+            // 失败处理 (4xx/5xx) error_code
+            int statusCode = ex.getStatusCode().value();
+            String errorBody = ex.getResponseBodyAsString();
+            
+            String errorCode = String.valueOf(statusCode);
+            String errorMessage = "システムエラー発生しました";
+
+            try {
+                if (errorBody != null && !errorBody.trim().isEmpty()) {
+                    ErrorResult errorDto = this.objectMapper.readValue(errorBody, ErrorResult.class);
+                    if (errorDto != null) {
+                        errorCode = errorDto.getErrorCode();
+                        errorMessage = errorDto.getErrorMessage();
+                    }
+                }
+            } catch (Exception parseEx) {
+                errorMessage = "Ekyc :リスポンスエラー詳細情報処理失敗 " + ex.getMessage();
+            }
+            
+            EkycApiErrorCode  apiErroCode = EkycApiErrorCode.fromRawCode(errorCode);
+            throw new EkycRemoteApiException(statusCode, apiErroCode, errorCode, errorMessage);
+        }catch (Exception e) {
+                log.error("NETWORK異常発生しました, URL: {}", url, e);
+                EkycApiErrorCode  apiErroCode = EkycApiErrorCode.getSystemError();
+                throw new EkycRemoteApiException(HttpStatus.INTERNAL_SERVER_ERROR.value(), apiErroCode, "SDK_NETWORK_TIMEOUT", "NETWORK異常発生しました");
+        }
+    }
+
+    /**
+     * トークン取得 API 専用 リスポンス処理
+     */
+    public GetTokenResponseDTO executeGetToken(String url, HttpMethod method, Object requestBody,
+            HttpHeaders requestHeaders) {
+        try {
+            HttpEntity<Object> entity = new HttpEntity<Object>(requestBody, requestHeaders);
+
+            logRequestBody(entity);
+
+            ResponseEntity<String> response = this.restTemplate.exchange(url, method, entity, String.class);
+            HttpStatus status = (HttpStatus) response.getStatusCode();
+
+            // 成功処理 (2xx)
+            if (status.is2xxSuccessful()) {
+                String body = response.getBody();
+                if (body == null || body.trim().isEmpty()) {
+                    return null;
+                }
+                try {
+                    return this.objectMapper.readValue(body, GetTokenResponseDTO.class);
+                } catch (Exception e) {
+                    log.error("ekyc トークン取得リスポンス処理失敗, URL: {}", url, e);
+                    throw new BadRequestException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "予期せぬエラー発生しました。");
+                }
+            }
+            throw new BadRequestException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "予期せぬエラー発生しました。");
+
+        } catch (HttpStatusCodeException ex) {
+            // 失败处理 (4xx/5xx) error_code
+            throw toRemoteApiException(ex);
+        } catch (BadRequestException | EkycRemoteApiException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("NETWORK異常発生しました, URL: {}", url, e);
+            EkycApiErrorCode apiErroCode = EkycApiErrorCode.getSystemError();
+            throw new EkycRemoteApiException(HttpStatus.INTERNAL_SERVER_ERROR.value(), apiErroCode,
+                    "SDK_NETWORK_TIMEOUT", "NETWORK異常発生しました");
+        }
+    }
+
+    /**
+     * 申請情報登録 API 専用 リスポンス処理
+     */
+    public EkycRequestInformationResponseDto executeRequestInformation(String url, HttpMethod method,
+            Object requestBody, HttpHeaders requestHeaders) {
+        try {
+            HttpEntity<Object> entity = new HttpEntity<Object>(requestBody, requestHeaders);
+
+            logRequestBody(entity);
+
+            ResponseEntity<String> response = this.restTemplate.exchange(url, method, entity, String.class);
+            HttpStatus status = (HttpStatus) response.getStatusCode();
+
+            // 成功処理 (2xx)
+            if (status.is2xxSuccessful()) {
+                String body = response.getBody();
+                if (body == null || body.trim().isEmpty()) {
+                    return null;
+                }
+                try {
+                    return this.objectMapper.readValue(body, EkycRequestInformationResponseDto.class);
+                } catch (Exception e) {
+                    log.error("ekyc 申請情報登録リスポンス処理失敗, URL: {}", url, e);
+                    throw new BadRequestException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "予期せぬエラー発生しました。");
+                }
+            }
+            throw new BadRequestException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "予期せぬエラー発生しました。");
+
+        } catch (HttpStatusCodeException ex) {
+            // 失败处理 (4xx/5xx) error_code
+            throw toRemoteApiException(ex);
+        } catch (BadRequestException | EkycRemoteApiException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("NETWORK異常発生しました, URL: {}", url, e);
+            EkycApiErrorCode apiErroCode = EkycApiErrorCode.getSystemError();
+            throw new EkycRemoteApiException(HttpStatus.INTERNAL_SERVER_ERROR.value(), apiErroCode,
+                    "SDK_NETWORK_TIMEOUT", "NETWORK異常発生しました");
+        }
+    }
+
+    /**
+     * 4xx/5xx リスポンスのエラー詳細を解析し、EkycRemoteApiException に変換する
+     */
+    private EkycRemoteApiException toRemoteApiException(HttpStatusCodeException ex) {
+
+        int statusCode = ex.getStatusCode().value();
+        String errorBody = ex.getResponseBodyAsString();
+
+        String errorCode = String.valueOf(statusCode);
+        String errorMessage = "システムエラー発生しました";
+
+        try {
+            if (errorBody != null && !errorBody.trim().isEmpty()) {
+                ErrorResult errorDto = this.objectMapper.readValue(errorBody, ErrorResult.class);
+                if (errorDto != null) {
+                    errorCode = errorDto.getErrorCode();
+                    errorMessage = errorDto.getErrorMessage();
+                }
+            }
+        } catch (Exception parseEx) {
+            errorMessage = "Ekyc :リスポンスエラー詳細情報処理失敗 " + ex.getMessage();
+        }
+
+        EkycApiErrorCode apiErroCode = EkycApiErrorCode.fromRawCode(errorCode);
+        return new EkycRemoteApiException(statusCode, apiErroCode, errorCode, errorMessage);
+    }
+
+    private void logRequestBody(HttpEntity<Object> entity) throws Exception {
 
         if (entity == null || entity.getBody() == null) {
             return;
@@ -148,10 +302,11 @@ public class EkycSdkClient {
             String finalJsonStr = this.objectMapper.writeValueAsString(entity.getBody());
             log.info("ekyc final request body:" + finalJsonStr);
         } catch (Exception e) {
-            log.error("ekyc read request failed, msg: ", e);
-            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP1300,
-                    "eKYCリクエストボディの読取に失敗しました");
+             log.error("ekyc read request failed, msg: ", e);
+             EkycApiErrorCode  apiErroCode = EkycApiErrorCode.getLocaleError();
+             throw new EkycRemoteApiException(HttpStatus.INTERNAL_SERVER_ERROR.value(), apiErroCode, "リクエスト読取失敗", "Failed to read the request body data");
         }
+
     }
 
     private RestTemplate createRestTemplate() throws Exception {
@@ -187,10 +342,4 @@ public class EkycSdkClient {
 
             return new RestTemplate(factory);
     }
-
-    
-
-    
-
-    
 }
