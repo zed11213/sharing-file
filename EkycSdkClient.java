@@ -38,13 +38,8 @@ import java.util.Collections;
 @Slf4j
 public class EkycSdkClient {
 
-    /** Content-Type 固定値 */
-    private static final String CONTENT_TYPE_JSON = "application/json;charset=UTF-8";
-
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
-    private final String apiKeyName;
-    private final String apiKeyValue;
 
     /**
      * @param apiKeyName
@@ -52,18 +47,18 @@ public class EkycSdkClient {
      */
     public EkycSdkClient(String apiKeyName, String apiKeyValue)  {
 
-        this.apiKeyName = apiKeyName;
-        this.apiKeyValue = apiKeyValue;
-
         this.objectMapper = new ObjectMapper();
         this.objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
           /*共通ヘッダー設定 */
-          /* add ではなく set を利用する。add の場合、メッセージコンバータが設定済の
-             Content-Type に値が追加され、ヘッダーが重複してしまうため。 */
+          /* add ではなくset を利用する。add の場合、メッセージコンバータが設定済の
+             Content-Type に値が追加され、ヘッダーが重複して 415 になるため。
+             呼出元でContent-Typeを指定済の場合はそちらを優先する。 */
         ClientHttpRequestInterceptor apiKeyInterceptor = (request, body, execution) -> {
             request.getHeaders().set(apiKeyName, apiKeyValue);
-            request.getHeaders().set(HttpHeaders.CONTENT_TYPE, CONTENT_TYPE_JSON);
+            if (request.getHeaders().getContentType() == null) {
+                request.getHeaders().set("Content-Type","application/json;charset=UTF-8");
+            }
             return execution.execute(request, body);
         };
 
@@ -200,28 +195,14 @@ public class EkycSdkClient {
     public GetTokenResponseDTO executeGetToken(String url, HttpMethod method, Object requestBody,
             HttpHeaders requestHeaders) {
         try {
-            /* 実績のある旧実装と同じ形式（APIキー + Content-Type を明示設定）でリクエストを組み立てる */
-            HttpEntity<Object> entity = new HttpEntity<Object>(requestBody, buildJsonHeaders(requestHeaders));
+            HttpEntity<Object> entity = new HttpEntity<Object>(requestBody, requestHeaders);
 
             logRequestBody(entity);
 
-            ResponseEntity<String> response = this.restTemplate.exchange(url, method, entity, String.class);
-            HttpStatus status = (HttpStatus) response.getStatusCode();
+            ResponseEntity<GetTokenResponseDTO> response = this.restTemplate.exchange(url, method, entity,
+                    GetTokenResponseDTO.class);
 
-            // 成功処理 (2xx)
-            if (status.is2xxSuccessful()) {
-                String body = response.getBody();
-                if (body == null || body.trim().isEmpty()) {
-                    return null;
-                }
-                try {
-                    return this.objectMapper.readValue(body, GetTokenResponseDTO.class);
-                } catch (Exception e) {
-                    log.error("ekyc トークン取得リスポンス処理失敗, URL: {}", url, e);
-                    throw new BadRequestException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "予期せぬエラー発生しました。");
-                }
-            }
-            throw new BadRequestException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "予期せぬエラー発生しました。");
+            return response.getBody();
 
         } catch (HttpStatusCodeException ex) {
             // 失败处理 (4xx/5xx) error_code
@@ -242,28 +223,14 @@ public class EkycSdkClient {
     public EkycRequestInformationResponseDto executeRequestInformation(String url, HttpMethod method,
             Object requestBody, HttpHeaders requestHeaders) {
         try {
-            /* 実績のある旧実装と同じ形式（APIキー + Content-Type を明示設定）でリクエストを組み立てる */
-            HttpEntity<Object> entity = new HttpEntity<Object>(requestBody, buildJsonHeaders(requestHeaders));
+            HttpEntity<Object> entity = new HttpEntity<Object>(requestBody, requestHeaders);
 
             logRequestBody(entity);
 
-            ResponseEntity<String> response = this.restTemplate.exchange(url, method, entity, String.class);
-            HttpStatus status = (HttpStatus) response.getStatusCode();
+            ResponseEntity<EkycRequestInformationResponseDto> response = this.restTemplate.exchange(url, method, entity,
+                    EkycRequestInformationResponseDto.class);
 
-            // 成功処理 (2xx)
-            if (status.is2xxSuccessful()) {
-                String body = response.getBody();
-                if (body == null || body.trim().isEmpty()) {
-                    return null;
-                }
-                try {
-                    return this.objectMapper.readValue(body, EkycRequestInformationResponseDto.class);
-                } catch (Exception e) {
-                    log.error("ekyc 申請情報登録リスポンス処理失敗, URL: {}", url, e);
-                    throw new BadRequestException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "予期せぬエラー発生しました。");
-                }
-            }
-            throw new BadRequestException(ErrorCodeConstant.EKYC_CODE_MBEK0001, "予期せぬエラー発生しました。");
+            return response.getBody();
 
         } catch (HttpStatusCodeException ex) {
             // 失败处理 (4xx/5xx) error_code
@@ -276,24 +243,6 @@ public class EkycSdkClient {
             throw new EkycRemoteApiException(HttpStatus.INTERNAL_SERVER_ERROR.value(), apiErroCode,
                     "SDK_NETWORK_TIMEOUT", "NETWORK異常発生しました");
         }
-    }
-
-    /**
-     * 実績のある旧実装と同じ形式でリクエストヘッダーを組み立てる。
-     * APIキーと Content-Type は set で設定し、ヘッダーの重複付与を防ぐ。
-     *
-     * @param requestHeaders 呼出元指定ヘッダー（null 可）
-     * @return リクエストヘッダー
-     */
-    private HttpHeaders buildJsonHeaders(HttpHeaders requestHeaders) {
-
-        HttpHeaders headers = new HttpHeaders();
-        if (requestHeaders != null) {
-            headers.putAll(requestHeaders);
-        }
-        headers.set(this.apiKeyName, this.apiKeyValue);
-        headers.set(HttpHeaders.CONTENT_TYPE, CONTENT_TYPE_JSON);
-        return headers;
     }
 
     /**
@@ -353,16 +302,14 @@ public class EkycSdkClient {
                         NoopHostnameVerifier.INSTANCE
                     );
 
-            // 実績のある RestEkycClientConfig#ekycRestTemplate2 と同じ設定に合わせる
-            // ※ JVM全体の設定のため、両者で値が異なると生成順で挙動が変わってしまう
-            System.setProperty("jsse.enableSNIExtension", "true");
+            System.setProperty("jsse.enableSNIExtension", "false");
 
             // フォワードプロキシ
             HttpHost proxy = new HttpHost(
 
                     "dsp-access-2.d-dspcommon.internal",//開発環境
     //					"dsp-access-2.p-dspcommon.internal", //本番環境
-                    1052, "http");
+                    1052);
 
             CloseableHttpClient httpClient = HttpClients.custom().setSSLSocketFactory(socketFactory).setProxy(proxy)
                     .build();
