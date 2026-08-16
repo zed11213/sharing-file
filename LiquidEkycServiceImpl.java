@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
@@ -175,81 +176,159 @@ public class LiquidEkycServiceImpl implements LiquidEkycService {
     public GetTokenResponseDTO getToken(GetTokenRequestDTO requestDTO) {
         logger.info("ekyc getToken");
 
-        try {
-            logger.info("ekyc before");
-            if (requestDTO.getApplicantId() == null || requestDTO.getApplicantId().isEmpty()) {
-                requestDTO.setApplicantId(createApplicantId());
-            }
-            EkycGetTokenRequestDto ekycRequestDto = new EkycGetTokenRequestDto();
-            // トークン取得リクエストDTOの設定
-            ekycRequestDto.setApplicantId(requestDTO.getApplicantId());
-            ekycRequestDto.setOperationAssignmentPriority(requestDTO.getOperationAssignmentPriority());
-            ekycRequestDto.setRedirectUrl(requestDTO.getRedirectUrl());
-            ekycRequestDto.setErrorRedirectUrl(requestDTO.getErrorRedirectUrl());
-            String url = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl, EkycApiEndpoints.GET_TOKEN);
-            logger.info(url + "::REQ-> " + JSONObject.toJSONString(ekycRequestDto));
-            // APIキーとContent-TypeはEkycSdkClientの共通ヘッダーで設定される
-            GetTokenResponseDTO body = ekycClient.executeGetToken(url, HttpMethod.POST, ekycRequestDto, null);
-
-            body.setApplicantId(requestDTO.getApplicantId());
-            return body;
-        } catch (EkycRemoteApiException e) {
-            logger.info("ekyc getToken EkycRemoteApiException errorCode={} message={}", e.getErrorCode(),
-                    e.getMessage());
-            throw e;
-        } catch (RestClientResponseException e) {
-            logger.info("ekyc RestClientResponseException，statusCode={}, responseBody={}",
-                    e.getRawStatusCode(),
-                    e.getResponseBodyAsString(),
-                    e);
-            throw e;
-
-        } catch (RestClientException e) {
-            logger.info("ekyc RestClientException:", e);
-            throw e;
-        } catch (Exception e) {
-            logger.info("ekyc exception:", e.getMessage());
-            logger.info("ekyc exception", e);
-            throw new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP0010, "");
+        logger.info("ekyc before");
+        if (requestDTO.getApplicantId() == null || requestDTO.getApplicantId().isEmpty()) {
+            requestDTO.setApplicantId(createApplicantId());
         }
+        EkycGetTokenRequestDto ekycRequestDto = new EkycGetTokenRequestDto();
+        // トークン取得リクエストDTOの設定
+        ekycRequestDto.setApplicantId(requestDTO.getApplicantId());
+        ekycRequestDto.setOperationAssignmentPriority(requestDTO.getOperationAssignmentPriority());
+        ekycRequestDto.setRedirectUrl(requestDTO.getRedirectUrl());
+        ekycRequestDto.setErrorRedirectUrl(requestDTO.getErrorRedirectUrl());
+        String url = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl, EkycApiEndpoints.GET_TOKEN);
+        logger.info(url + "::REQ-> " + JSONObject.toJSONString(ekycRequestDto));
+
+        GetTokenResponseDTO body = null;
+        try {
+            logger.info("ekyc トークン取得API start old");
+            HttpHeaders requestHeaders = new HttpHeaders();
+            requestHeaders.add(HEADER_API_KEY, liquidApiKey);
+            requestHeaders.add("Content-Type", "application/json");
+
+            body = ekycClient.executeGetToken(url, HttpMethod.POST, ekycRequestDto, requestHeaders);
+            if (Objects.isNull(body)) {
+                throw new IllegalStateException("ekyc getToken response body is empty");
+            }
+            logger.info("ekyc トークン取得API end old");
+        } catch (Exception e) {
+            // 保険：旧実装（実績のあるRestTemplate）で1回だけ再実行する
+            logger.info("old ekycClient.executeGetToken response error:" + e.getMessage());
+            logger.info("ekyc トークン取得API start");
+            try {
+                RestTemplate restTemplate = restClientConfig.ekycRestTemplate2();
+
+                String oldUrl = liquidConnectorUrl + GET_TOKEN;
+
+                // ヘッダー設定
+                HttpHeaders requestHeaders = new HttpHeaders();
+                requestHeaders.add(HEADER_API_KEY, liquidApiKey);
+                requestHeaders.add("Content-Type", "application/json");
+
+                ParameterBuilder parameterDto = ParameterBuilder.buildLiquidEkyc(ekycRequestDto, requestHeaders);
+
+                ResponseEntity<GetTokenResponseDTO> response = restTemplate.exchange(oldUrl, HttpMethod.POST,
+                        parameterDto.getRequestEntity(), GetTokenResponseDTO.class);
+                body = response.getBody();
+                logger.info("ekyc トークン取得API end");
+            } catch (EkycRemoteApiException e1) {
+                logger.info("ekyc getToken EkycRemoteApiException:" + e1.getMessage());
+                throw e1;
+            } catch (Exception e2) {
+                logger.info("ekyc getToken Exception:" + e2.getMessage());
+                // 元の例外を優先して通知する
+                throw toGetTokenException(e);
+            }
+
+            if (Objects.isNull(body)) {
+                logger.info("ekyc getToken old logic response body is empty");
+                // 元の例外を優先して通知する
+                throw toGetTokenException(e);
+            }
+        }
+
+        body.setApplicantId(requestDTO.getApplicantId());
+        return body;
+    }
+
+    /**
+     * トークン取得 API の例外を従来通りの型に変換する
+     *
+     * @param e 発生した例外
+     * @return 通知する例外
+     */
+    private RuntimeException toGetTokenException(Exception e) {
+
+        if (e instanceof EkycRemoteApiException) {
+            EkycRemoteApiException ekycException = (EkycRemoteApiException) e;
+            logger.info("ekyc getToken EkycRemoteApiException errorCode={} message={}", ekycException.getErrorCode(),
+                    ekycException.getMessage());
+            return ekycException;
+        }
+        if (e instanceof RestClientResponseException) {
+            RestClientResponseException restException = (RestClientResponseException) e;
+            logger.info("ekyc RestClientResponseException，statusCode={}, responseBody={}",
+                    restException.getRawStatusCode(),
+                    restException.getResponseBodyAsString(),
+                    restException);
+            return restException;
+        }
+        if (e instanceof RestClientException) {
+            logger.info("ekyc RestClientException:", e);
+            return (RestClientException) e;
+        }
+        logger.info("ekyc exception:", e.getMessage());
+        logger.info("ekyc exception", e);
+        return new InternalServerErrorException(ErrorCodeConstant.ERROR_CODE_MBAP0010, "");
     }
 
     private String requestInformation(EkycRequestInformationRequestDto requestDto) {
         String applicantId = requestDto.getApplicantId();
         logger.info(applicantId + " " + "申請情報登録API start");
+
+        String fullUrlPath = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl,
+                EkycApiEndpoints.KYC_REQUEST_INFORMATION);
+        logger.info("ekyc requestInformation url={}", fullUrlPath);
+
+        EkycRequestInformationResponseDto response = null;
         try {
-            // ParameterBuilder parameterDto = ParameterBuilder.buildLiquidEkyc(requestDto,
-            // null);
+            logger.info(applicantId + " " + "申請情報登録API start old");
+            HttpHeaders requestHeaders = new HttpHeaders();
+            requestHeaders.add(HEADER_API_KEY, liquidApiKey);
+            requestHeaders.add("Content-Type", "application/json");
 
-            // String fullUrlPath =
-            // EkycApiEndpoints.buildFullUrl(EkycApiEndpoints.KYC_REQUEST_INFORMATION);
-            // String fullUrlPath = liquidConnectorUrl + REQUEST_INFORMATIONS;
-            // logger.info("ekyc requestInformation url={}", fullUrlPath);
-
-            // EkycRequestInformationResponseDto response = ekycClient.execute(fullUrlPath,
-            // HttpMethod.POST,
-            // parameterDto,EkycRequestInformationResponseDto.class);
-
-            String fullUrlPath = EkycApiEndpoints.buildFullUrl(liquidConnectorUrl,
-                    EkycApiEndpoints.KYC_REQUEST_INFORMATION);
-            logger.info("ekyc requestInformation url={}", fullUrlPath);
-            // APIキーとContent-TypeはEkycSdkClientの共通ヘッダーで設定される
-            EkycRequestInformationResponseDto response = ekycClient.executeRequestInformation(
+            response = ekycClient.executeRequestInformation(
                     fullUrlPath,
-                    HttpMethod.POST, requestDto, null);
+                    HttpMethod.POST, requestDto, requestHeaders);
+            logger.info(applicantId + " " + "申請情報登録API end old");
 
-            logger.info(applicantId + " " + "申請情報登録API end");
-            logger.info("ekyc requestInformation after, response={}",
-                    response != null ? JSONObject.toJSONString(response) : "null");
-
-        } catch (EkycRemoteApiException e) {
-            logger.error("ekyc requestInformation EkycRemoteApiException errorCode={} message={}", e.getErrorCode(),
-                    e.getMessage());
-            throw e;
         } catch (Exception e) {
-            logger.error("ekyc requestInformation Exception message={}", e.getMessage(), e);
-            throw e;
+            // 保険：旧実装（実績のあるRestTemplate）で1回だけ再実行する
+            logger.info("old ekycClient.executeRequestInformation response error:" + e.getMessage());
+            logger.info(applicantId + " " + "申請情報登録API start");
+            try {
+                RestTemplate restTemplate = restClientConfig.ekycRestTemplate2();
+
+                String url = liquidConnectorUrl + REQUEST_INFORMATIONS;
+
+                // ヘッダー設定
+                HttpHeaders requestHeaders = new HttpHeaders();
+                requestHeaders.add(HEADER_API_KEY, liquidApiKey);
+                requestHeaders.add("Content-Type", "application/json");
+
+                ParameterBuilder parameterDto = ParameterBuilder.buildLiquidEkyc(requestDto, requestHeaders);
+
+                ResponseEntity<EkycRequestInformationResponseDto> oldResponse = restTemplate.exchange(url,
+                        HttpMethod.POST, parameterDto.getRequestEntity(), EkycRequestInformationResponseDto.class);
+                response = oldResponse.getBody();
+                logger.info(applicantId + " " + "申請情報登録API end");
+
+            } catch (EkycRemoteApiException e1) {
+                logger.info("ekyc requestInformation EkycRemoteApiException:" + e1.getMessage());
+                throw e1;
+            } catch (Exception e2) {
+                logger.info("ekyc requestInformation Exception:" + e2.getMessage());
+                // 元の例外を優先して通知する
+                if (e instanceof RuntimeException) {
+                    throw (RuntimeException) e;
+                }
+                throw new InternalServerErrorException(ErrorCodeConstant.EKYC_CODE_MBEK0001, e.getMessage());
+            }
         }
+
+        logger.info("ekyc requestInformation after, response={}",
+                response != null ? JSONObject.toJSONString(response) : "null");
+
         return Constant.OK;
     }
 
